@@ -1684,8 +1684,8 @@ const V3 = (function(){
 
   function pushFace(pts, col, depth){
     let f = FA[nF];
-    if(!f) f = FA[nF] = {p:[], c:'', d:0, n:0};
-    f.c = col; f.d = depth; f.n = pts.length;
+    if(!f) f = FA[nF] = {p:[], c:'', d:0, n:0, rc:null};
+    f.c = col; f.d = depth; f.n = pts.length; f.rc = null;
     const P = f.p;
     for(let i=0;i<pts.length;i++){
       let q = P[i]; if(!q) q = P[i] = [0,0];
@@ -1750,6 +1750,8 @@ const V3 = (function(){
     },
     /* いまの姿勢のローカル+zが、どれくらいカメラを向いているか（1で真正面） */
     front(){ return M[6]*CAMY + M[10]*CAMZ; },
+    /* 横にどれだけひねっているか。+なら右を向いている（＝右目が向こうがわ） */
+    turn(){ return M[2]; },
     /* いまの原点の画面位置 */
     here(){ return toScreen([M[3], M[7], M[11]]); },
 
@@ -1806,6 +1808,20 @@ const V3 = (function(){
       return api;
     },
 
+    /* 画面のマス目にぴたりと合わせた四角。
+       1pxより小さい形を斜めに塗るとにじんでしまうので、
+       遠くの顔はこれで、もとのドット絵と同じくかっちり描く。
+       w,h は画面のピクセル数でそのまま指定する。 */
+    rect(x, y, z, w, h, col, extra){
+      const p = api.pt(x, y, z), sp = toScreen(p);
+      let f = FA[nF];
+      if(!f) f = FA[nF] = {p:[], c:'', d:0, n:0, rc:null};
+      f.c = col; f.d = toDepth(p) + zb + (extra || 0); f.n = 0;
+      f.rc = [Math.round(sp[0] - w/2), Math.round(sp[1] - h/2), w, h];
+      nF++;
+      return api;
+    },
+
     /* 地面の影 */
     shadow(cx, cz, rx, rz, a){
       const p = api.pt(cx, 0, cz), s = toScreen(p);
@@ -1831,6 +1847,7 @@ const V3 = (function(){
   function cmp(a, b){ return a.d - b.d; }
 
   function fill(f){
+    if(f.rc){ ctx.fillStyle = f.c; ctx.fillRect(f.rc[0], f.rc[1], f.rc[2], f.rc[3]); return; }
     const P = f.p, n = f.n;
     let cx = 0, cy = 0;
     for(let i=0;i<n;i++){ cx += P[i][0]; cy += P[i][1]; }
@@ -2023,8 +2040,96 @@ function expNow(id, base){
    顔を描く（頭のローカル座標のなかで呼ぶ）
    hw,hh,hd = 頭の半分の大きさ
    ========================================================================= */
+/* =========================================================================
+   小さく写るときの顔（フィールドの人）
+   ─ 頭は画面で8px足らずしかない。そこへ曲線を塗ると1px以下のにじみになり、
+     歩くたびに形がゆれて、ぼやけた顔に見えてしまう。
+     そこでこの大きさのときは、画面のマス目に合わせた四角だけで顔を組む。
+     もとのドット絵と同じ考えかたで、立体の向きにだけ乗っている。
+   ========================================================================= */
+function drawFaceSmall(hw, hh, hd, look, S, talking){
+  const f = look.f || {};
+  const dark = f.eyeCol || '#2b2119';
+  const brc  = f.browCol || look.hair || '#3a2a1a';
+  const z  = hd + 0.05;
+  const ex = hw * (f.ex || 0.41);
+  const ey = hh * (f.ey === undefined ? -0.06 : f.ey);
+  const my = -hh * (f.my || 0.62);
+  const by = ey + hh*0.36;
+  const R = (x, v, w, h, col, e)=>V3.rect(x, v, z, w, h, col, FBIAS + (e || 0));
+  /* 画面の1pxぶんが、頭のローカル座標でどれだけか */
+  const PY = 1/HK;
+
+  /* 横を向いているときは、向こうがわの目とまゆは見えない。
+     そうしないと、遠近でつぶれた目がふたつ重なってにじむ。 */
+  const turn = V3.turn();
+  const hide = Math.abs(turn) > 0.55 ? (turn > 0 ? 1 : -1) : 0;
+
+  /* ---- 目 ----
+     目の小さい人（おとな・お年より）は一段うすくする。
+     まるい2x2のままだと、うす色の肌にくぼみのように見えてしまう。 */
+  const thin = (f.eh || 0.21) < 0.19 ? 1 : 0;
+  const eyeH = k => Math.max(1, ((k === 'wide') ? 3 : (k === 'open' || k === 'soft') ? 2 : 1) - thin);
+  const drawEye = (side, k)=>{
+    if(side === hide) return;
+    R(side*ex, ey, 2, eyeH(k), dark, 0.1);
+  };
+  drawEye(-1, S.eyeL || S.eye || 'open');
+  drawEye( 1, S.eyeR || S.eye || 'open');
+
+  /* ---- まゆ（内がわの1pxを上下させて、八の字とつり眉を出す） ---- */
+  const bk = S.brow || 'flat';
+  if(bk !== 'flat' || !f.noBrow){
+    const lift = (bk === 'up' || bk === 'high') ? PY : 0;
+    const tilt = bk === 'sad' ? PY : bk === 'angry' ? -PY : 0;
+    for(const side of [-1, 1]){
+      if(side === hide) continue;
+      R(side*(ex + 0.55), by + lift, 1, 1, brc, 0.06);              // 外がわ
+      R(side*(ex - 0.55), by + lift + tilt, 1, 1, brc, 0.06);       // 内がわ
+    }
+  }
+
+  /* ---- 口 ---- */
+  let mk = S.mouth || 'line';
+  if(talking && ((frameCount >> 2) & 3) < 2)
+    mk = (mk === 'smile' || mk === 'grin' || mk === 'smileS') ? 'openSmile' :
+         (mk === 'line'  || mk === 'small') ? 'o' : mk;
+  const mx = hw*0.30;
+  if(mk === 'o' || mk === 'openSmile')      R(0, my, 2, 2, '#59292a', 0.06);
+  else if(mk === 'oBig' || mk === 'laugh' || mk === 'wail')
+                                            R(0, my, 3, 2, '#59292a', 0.06);
+  else if(mk === 'smile' || mk === 'grin' || mk === 'smileS' || mk === 'smirk'){
+    R(-mx, my + PY, 1, 1, dark, 0.06); R(0, my, 1, 1, dark, 0.06);
+    R( mx, my + PY, 1, 1, dark, 0.06);
+  } else if(mk === 'frown' || mk === 'frown2' || mk === 'pout'){
+    R(-mx, my, 1, 1, dark, 0.06); R(0, my + PY, 1, 1, dark, 0.06);
+    R( mx, my, 1, 1, dark, 0.06);
+  } else if(mk === 'wavy'){
+    R(-mx, my, 1, 1, dark, 0.06); R(0, my + PY, 1, 1, dark, 0.06);
+  } else                                    R(0, my, 2, 1, dark, 0.06);
+
+  /* ---- ほお・あせ・なみだ・怒りマーク ---- */
+  if(S.blush){
+    for(const side of [-1, 1]) R(side*hw*0.66, -hh*0.18, 2, 1, '#e07a6c', 0.02);
+  }
+  if(S.sweat) R(hw*0.80, hh*0.22 - ((frameCount % 96)/96)*hh*0.4, 1, 2, '#94d4f0', 0.2);
+  if(S.tear){
+    const t = (frameCount % 64)/64;
+    for(const side of [-1, 1]) R(side*ex, ey - hh*0.30 - t*hh*0.5, 1, 2, '#94d4f0', 0.2);
+  }
+  if(S.mad){
+    R(hw*0.62, hh*0.46, 3, 1, '#d2483c', 0.2);
+    R(hw*0.62, hh*0.46, 1, 3, '#d2483c', 0.2);
+  }
+  if(look.glasses){
+    for(const side of [-1, 1]) R(side*ex, ey, 3, 1, '#3b3b40', 0.24);
+    R(0, ey, 1, 1, '#3b3b40', 0.24);
+  }
+}
+
 function drawFace(hw, hh, hd, look, exName, talking, big){
   const S = EXPR[exName] || EXPR.neutral;
+  if(!big){ drawFaceSmall(hw, hh, hd, look, S, talking); return; }
   const f = look.f || {};
   const dark = f.eyeCol || '#2b2119';
   const brc  = f.browCol || look.hair || '#3a2a1a';
@@ -2133,19 +2238,21 @@ function drawFace(hw, hh, hd, look, exName, talking, big){
    ─ 箱を組みあげて体をつくる。関節はぜんぶ入れ子の回転。
    ─ からだつき・髪・服・持ちものは、キャラごとの表にしたがって変える。
    ========================================================================= */
-/* 体の寸法。奥ゆき（hd,sd）は幅より浅くしてある。
-   このカメラでは奥ゆきがそのまま画面の高さに出るので、
-   実物どおりの厚みにすると頭が箱に見えてしまうため。 */
+/* 体の寸法。
+   頭はもとのドット絵と同じくらい大きくとってある。小さく写るので、
+   顔のつくりが1pxを下まわると、なにを描いてもにじんでしまうため。
+   奥ゆき（hd,sd）は幅より浅い。このカメラでは奥ゆきがそのまま画面の高さに
+   出るので、実物どおりの厚みにすると頭が箱に見えてしまう。 */
 const BUILD = {
-  chibi : {hh:2.20, hw:2.58, hd:1.34, neck:0.26, tor:3.17, sh:2.03, sd:0.97, leg:3.77, lw:0.78, foot:0.53, arm:3.2, aw:0.58},
-  kid   : {hh:2.20, hw:2.62, hd:1.36, neck:0.34, tor:4.30, sh:2.25, sd:1.05, leg:4.60, lw:0.82, foot:0.59, arm:4.3, aw:0.62},
-  kidbig: {hh:2.26, hw:2.66, hd:1.39, neck:0.38, tor:4.15, sh:2.51, sd:1.14, leg:5.13, lw:0.89, foot:0.63, arm:4.6, aw:0.67},
-  girl  : {hh:2.16, hw:2.55, hd:1.33, neck:0.34, tor:3.70, sh:2.08, sd:0.97, leg:4.53, lw:0.75, foot:0.56, arm:4.2, aw:0.57},
-  teen  : {hh:2.21, hw:2.57, hd:1.34, neck:0.47, tor:4.45, sh:2.31, sd:1.01, leg:5.73, lw:0.80, foot:0.60, arm:5.3, aw:0.60},
-  adult : {hh:2.26, hw:2.64, hd:1.38, neck:0.53, tor:4.83, sh:2.78, sd:1.21, leg:5.96, lw:0.92, foot:0.68, arm:5.8, aw:0.71},
-  stout : {hh:2.32, hw:2.71, hd:1.42, neck:0.41, tor:4.75, sh:3.03, sd:1.40, leg:5.35, lw:1.03, foot:0.72, arm:5.6, aw:0.78},
-  plump : {hh:2.26, hw:2.67, hd:1.40, neck:0.38, tor:4.52, sh:2.89, sd:1.36, leg:4.98, lw:0.98, foot:0.69, arm:5.3, aw:0.74},
-  old   : {hh:2.21, hw:2.58, hd:1.35, neck:0.41, tor:4.30, sh:2.47, sd:1.11, leg:5.20, lw:0.84, foot:0.65, arm:5.2, aw:0.64, hunch:0.22}
+  chibi : {hh:2.55, hw:3.84, hd:1.46, neck:0.24, tor:2.92, sh:3.15, sd:1.16, leg:3.47, lw:0.94, foot:0.49, arm:2.94, aw:0.70},
+  kid   : {hh:2.55, hw:3.90, hd:1.48, neck:0.31, tor:3.96, sh:3.49, sd:1.26, leg:4.23, lw:0.98, foot:0.54, arm:3.96, aw:0.74},
+  kidbig: {hh:2.62, hw:3.96, hd:1.51, neck:0.35, tor:3.82, sh:3.89, sd:1.37, leg:4.72, lw:1.07, foot:0.58, arm:4.23, aw:0.80},
+  girl  : {hh:2.51, hw:3.80, hd:1.45, neck:0.31, tor:3.40, sh:3.22, sd:1.16, leg:4.17, lw:0.90, foot:0.52, arm:3.86, aw:0.68},
+  teen  : {hh:2.56, hw:3.83, hd:1.46, neck:0.43, tor:4.09, sh:3.58, sd:1.21, leg:5.27, lw:0.96, foot:0.55, arm:4.88, aw:0.72},
+  adult : {hh:2.62, hw:3.93, hd:1.50, neck:0.49, tor:4.44, sh:4.31, sd:1.45, leg:5.48, lw:1.10, foot:0.63, arm:5.34, aw:0.85},
+  stout : {hh:2.69, hw:4.04, hd:1.54, neck:0.38, tor:4.37, sh:4.70, sd:1.68, leg:4.92, lw:1.24, foot:0.66, arm:5.15, aw:0.94},
+  plump : {hh:2.62, hw:3.98, hd:1.52, neck:0.35, tor:4.16, sh:4.48, sd:1.63, leg:4.58, lw:1.18, foot:0.63, arm:4.88, aw:0.89},
+  old   : {hh:2.56, hw:3.84, hd:1.47, neck:0.38, tor:3.96, sh:3.83, sd:1.33, leg:4.78, lw:1.01, foot:0.60, arm:4.78, aw:0.77, hunch:0.22}
 };
 
 /* ---- キャラごとのつくり ---------------------------------------------
@@ -2396,8 +2503,10 @@ function drawPerson3(sx, sy, dir, walk, p){
   const th = ph * Math.PI * 2;
   const swing = moving ? Math.sin(th) : 0;
   const idT = frameCount*0.045 + (p.seed || 0);
-  const breathe = moving ? 0 : Math.sin(idT)*0.10;
-  const bob = moving ? Math.abs(Math.cos(th))*0.40 - 0.20 : breathe;
+  const breathe = moving ? 0 : Math.sin(idT)*0.34;
+  /* 上下のゆれは画面のマス目に合わせて丸める。
+     半端に動かすと顔がにじんで、ぶれて見えてしまう。 */
+  const bob = Math.round((moving ? Math.abs(Math.cos(th))*0.9 - 0.45 : breathe) * HK) / HK;
   const lean = moving ? 0.09 : (b.hunch || 0) * 0.9;
 
   /* --- 表情 --- */
@@ -2488,7 +2597,7 @@ function drawPerson3(sx, sy, dir, walk, p){
     V3.move(0, tor + b.neck*0.4, 0);
     V3.box(b.aw*0.72, b.aw*0.72, b.aw*0.70, b.aw*0.70, -b.neck*0.5, b.neck*0.6, skin);
     let hy = Math.abs(yaw) > 2.0 ? 0 : -yaw*0.34;
-    if(!moving) hy += Math.sin(idT*0.45)*0.10;
+    if(!moving) hy += Math.sin(idT*0.30)*0.06;
     if(p.near != null && !moving){                   // そばの人のほうを見る
       let d = p.near - yaw;
       while(d >  Math.PI) d -= Math.PI*2;
@@ -8488,7 +8597,7 @@ function whoFace(id){
   const old = ctx; ctx = g;
   try{
     const s = spec3(look), b = BUILD[s.build] || BUILD.kid;
-    g.translate(38, 62); g.scale(6.2, 6.2);
+    g.translate(38, 64); g.scale(5.0, 5.0);
     V3.begin(0, 0);
     V3.rotY(-0.34).rotX(0.05);
     V3.box(b.sh*0.9, b.sd*0.9, b.sh*0.8, b.sd*0.86, -1.6, 0.2,
