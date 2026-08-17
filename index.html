@@ -346,7 +346,8 @@ function newGame(loop){
             sisterTalk:0, takuTalk:0, auntTalk:0, npcTalk:0, nothing:0, events:0, caps:0 },
     diary:[], radioCard:[], letters:[], sleptEarly:false, wokeEarly:false, radioDone:false,
     lastAllowance:1, seenEvents:{}, phase:'day', visited:{}, talkTally:{},
-    sumoWins:{}, lastLine:{}
+    sumoWins:{}, lastLine:{},
+    opt:{d3:1, bust:1}              // 見た目の設定（立体／話し相手の顔）
   };
 }
 function blankToday(){
@@ -386,6 +387,7 @@ function migrate(){
   if(!G.npc) G.npc = {};
   if(!G.letters) G.letters = [];
   if(!G.seenEvents) G.seenEvents = {};
+  if(!G.opt) G.opt = {d3:1, bust:1};
   STORY_KEYS.forEach(k=>{ if(G.story[k]===undefined) G.story[k]=0; });
   NPC_KEYS.forEach(k=>{ if(G.npc[k]===undefined) G.npc[k]=0; });
   const t = G.today, blank = blankToday();
@@ -1431,6 +1433,7 @@ function drawTile(t, gx, gy, area){
       break;
     case 'T': {
       drawGround(base==='sand'?'sand':'grass',x,y,gx,gy);
+      if(OPT3D){ propAt('T', gx, gy); break; }
       const c = h>0.5?C.tree:C.tree2;
       px(x+6,y+8,4,8,C.trunk); px(x+6,y+8,1,8,C.trunk2);
       px(x+2,y+1,12,9,c); px(x+1,y+3,14,5,c);
@@ -1440,11 +1443,13 @@ function drawTile(t, gx, gy, area){
       break; }
     case 'B':
       drawGround(base==='sand'?'sand':'grass',x,y,gx,gy);
+      if(OPT3D){ propAt('B', gx, gy); break; }
       px(x+2,y+6,12,8,C.tree2); px(x+3,y+4,10,4,C.tree);
       px(x+2,y+13,12,1,C.tree3);
       break;
     case 'R':
       drawGround(base,x,y,gx,gy);
+      if(OPT3D){ propAt('R', gx, gy); break; }
       px(x+2,y+5,12,9,C.stone); px(x+3,y+4,9,2,C.stone);
       px(x+2,y+12,12,2,C.stone3); px(x+4,y+6,3,2,'#ffffff44');
       break;
@@ -1511,6 +1516,7 @@ function drawTile(t, gx, gy, area){
       break;
     case 'o':                                   // 鳥居の柱
       drawGround('grass',x,y,gx,gy);
+      if(OPT3D) break;                           // 立体のときは鳥居ごとあとで建てる
       px(x+5,y+14,7,2,'#8a8478');                // 根もとの石
       px(x+5,y+0,6,15,C.torii);
       px(x+5,y+0,2,15,'#d4604a');
@@ -1602,8 +1608,1155 @@ function drawObject(area, gx, gy, x, y){
   }
 }
 
-/* ---- 人物（全キャラ共通のドット絵生成） ---- */
-function drawPerson(sx, sy, dir, walk, p){
+/* =========================================================================
+   ここから下は「立体（3D）で描くしくみ」。
+   ぼくのなつやすみのような箱庭に寄せるため、
+     ・背景は今までどおり色えんぴつ調の絵
+     ・人と草木だけを立体にして、そのうえに置く
+   という組みあわせにしている。
+   ========================================================================= */
+let OPT3D = true, OPTBUST = true;
+function syncOpt(){
+  if(!G) return;
+  if(!G.opt) G.opt = {};
+  if(G.opt.d3   === undefined) G.opt.d3 = 1;
+  if(G.opt.bust === undefined) G.opt.bust = 1;
+  OPT3D = !!G.opt.d3; OPTBUST = !!G.opt.bust;
+}
+
+/* =========================================================================
+   立体描画（ジオラマ）
+   ─ 背景は今までどおり色えんぴつ調の「描いた絵」のまま。
+     そこに人物と草木だけを立体で置いて、箱庭のように見せる。
+   ─ カメラは俯角およそ50度の平行投影。
+     地面の奥ゆき1pxが画面の1pxにそのまま写るので、もとのマップ絵とぴったり重なる。
+     高さ1は画面で HK px ぶん持ち上がる。
+   ─ 座標は  x=右 / y=上 / z=手前  （長さの単位はマップ絵と同じピクセル）
+   ========================================================================= */
+/* 高さ1が画面で何px上がるか。
+   奥ゆき1はそのまま画面1px。この二つの比がカメラの俯角にあたる。
+   1.3 だと約38度。上から見おろしつつ、顔もちゃんと見える角度。 */
+const HK = 1.30;
+const IHK = 1 / HK;
+const CAMY = 0.79, CAMZ = 0.61;     // カメラのほう（顔がこちらを向いているかの判定に使う）
+
+const V3 = (function(){
+  const LGT = (function(){ const x=-0.42, y=0.84, z=0.34, l=Math.sqrt(x*x+y*y+z*z);
+                           return [x/l, y/l, z/l]; })();
+
+  let fx = 0, fy = 0;            // 足もと（画面座標）
+  let M = null;                  // いまの姿勢
+  const ST = [];                 // 姿勢のスタック
+  const FA = [];                 // 面の入れもの（使いまわす）
+  let nF = 0;
+  let zb = 0;                    // 前後関係の下駄
+  let fl = 0;                    // 1なら陰影をつけない
+
+  function ident(){ return [1,0,0,0, 0,1,0,0, 0,0,1,0]; }
+  function mul(a,b){
+    return [
+      a[0]*b[0]+a[1]*b[4]+a[2]*b[8],   a[0]*b[1]+a[1]*b[5]+a[2]*b[9],   a[0]*b[2]+a[1]*b[6]+a[2]*b[10],   a[0]*b[3]+a[1]*b[7]+a[2]*b[11]+a[3],
+      a[4]*b[0]+a[5]*b[4]+a[6]*b[8],   a[4]*b[1]+a[5]*b[5]+a[6]*b[9],   a[4]*b[2]+a[5]*b[6]+a[6]*b[10],   a[4]*b[3]+a[5]*b[7]+a[6]*b[11]+a[7],
+      a[8]*b[0]+a[9]*b[4]+a[10]*b[8],  a[8]*b[1]+a[9]*b[5]+a[10]*b[9],  a[8]*b[2]+a[9]*b[6]+a[10]*b[10],  a[8]*b[3]+a[9]*b[7]+a[10]*b[11]+a[11]
+    ];
+  }
+
+  /* ---------- 色（明るさ別に作って使いまわす） ---------- */
+  const RGB = {}, SHC = {};
+  function rgbOf(c){
+    let v = RGB[c]; if(v) return v;
+    let r=128, g=128, b=128;
+    if(typeof c === 'string' && c.charCodeAt(0) === 35){
+      if(c.length === 4){ r=parseInt(c[1]+c[1],16); g=parseInt(c[2]+c[2],16); b=parseInt(c[3]+c[3],16); }
+      else if(c.length >= 7){ r=parseInt(c.substr(1,2),16); g=parseInt(c.substr(3,2),16); b=parseInt(c.substr(5,2),16); }
+    }
+    v = [r|0, g|0, b|0]; RGB[c] = v; return v;
+  }
+  function shade(c, k){
+    const q = k < 0 ? 0 : (k > 1.5 ? 45 : (k*30)|0);
+    const key = c + '|' + q;
+    let s = SHC[key]; if(s) return s;
+    const v = rgbOf(c), m = q/30;
+    const r = v[0]*m, g = v[1]*m, b = v[2]*m;
+    s = 'rgb(' + (r>255?255:r|0) + ',' + (g>255?255:g|0) + ',' + (b>255?255:b|0) + ')';
+    SHC[key] = s; return s;
+  }
+
+  function pushFace(pts, col, depth){
+    let f = FA[nF];
+    if(!f) f = FA[nF] = {p:[], c:'', d:0, n:0};
+    f.c = col; f.d = depth; f.n = pts.length;
+    const P = f.p;
+    for(let i=0;i<pts.length;i++){
+      let q = P[i]; if(!q) q = P[i] = [0,0];
+      q[0] = pts[i][0]; q[1] = pts[i][1];
+    }
+    nF++;
+  }
+
+  function toScreen(p){ return [fx + p[0], fy + p[2] - p[1]*HK]; }
+  function toDepth(p){ return p[2] + p[1]*IHK; }
+
+  function lit(W, i0, i1, i2){
+    const p = W[i0], q = W[i1], r = W[i2];
+    const ux=q[0]-p[0], uy=q[1]-p[1], uz=q[2]-p[2];
+    const vx=r[0]-q[0], vy=r[1]-q[1], vz=r[2]-q[2];
+    let nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx;
+    const l = Math.sqrt(nx*nx+ny*ny+nz*nz) || 1;
+    nx/=l; ny/=l; nz/=l;
+    const dt = nx*LGT[0] + ny*LGT[1] + nz*LGT[2];
+    return 0.72 + 0.28*(dt > 0 ? dt : 0) + 0.05*(ny > 0 ? ny : 0);
+  }
+
+  function quad(W, S, D, i0, i1, i2, i3, col){
+    const a = S[i0], b = S[i1], c = S[i2], d = S[i3];
+    const ar = a[0]*b[1]-b[0]*a[1] + b[0]*c[1]-c[0]*b[1] + c[0]*d[1]-d[0]*c[1] + d[0]*a[1]-a[0]*d[1];
+    if(ar >= 0) return;                                   // 裏を向いている
+    pushFace([a,b,c,d], fl ? col : shade(col, lit(W,i0,i1,i2)),
+             (D[i0]+D[i1]+D[i2]+D[i3])*0.25 + zb);
+  }
+
+  function ngon(W, S, D, idx, col){
+    const n = idx.length, pts = [];
+    let ar = 0, dz = 0;
+    for(let i=0;i<n;i++){
+      const a = S[idx[i]], b = S[idx[(i+1)%n]];
+      ar += a[0]*b[1] - b[0]*a[1];
+      pts.push(a); dz += D[idx[i]];
+    }
+    if(ar >= 0) return;
+    pushFace(pts, fl ? col : shade(col, lit(W, idx[0], idx[1], idx[2])), dz/n + zb);
+  }
+
+  const api = {
+    HK: HK,
+
+    begin(x, y){ fx = x; fy = y; M = ident(); ST.length = 0; nF = 0; zb = 0; fl = 0; },
+    at(x, y){ fx = x; fy = y; M = ident(); ST.length = 0; },
+
+    push(){ ST.push(M); return api; },
+    pop(){ M = ST.pop(); return api; },
+    bias(v){ zb = v; return api; },
+    flat(v){ fl = v ? 1 : 0; return api; },
+
+    move(x, y, z){ M = mul(M, [1,0,0,x, 0,1,0,y, 0,0,1,z]); return api; },
+    rotY(a){ const c=Math.cos(a), s=Math.sin(a); M = mul(M, [c,0,s,0, 0,1,0,0, -s,0,c,0]); return api; },
+    rotX(a){ const c=Math.cos(a), s=Math.sin(a); M = mul(M, [1,0,0,0, 0,c,-s,0, 0,s,c,0]); return api; },
+    rotZ(a){ const c=Math.cos(a), s=Math.sin(a); M = mul(M, [c,-s,0,0, s,c,0,0, 0,0,1,0]); return api; },
+    sc(sx, sy, sz){ M = mul(M, [sx,0,0,0, 0,sy,0,0, 0,0,sz,0]); return api; },
+
+    pt(x, y, z){
+      return [M[0]*x+M[1]*y+M[2]*z+M[3], M[4]*x+M[5]*y+M[6]*z+M[7], M[8]*x+M[9]*y+M[10]*z+M[11]];
+    },
+    /* いまの姿勢のローカル+zが、どれくらいカメラを向いているか（1で真正面） */
+    front(){ return M[6]*CAMY + M[10]*CAMZ; },
+    /* いまの原点の画面位置 */
+    here(){ return toScreen([M[3], M[7], M[11]]); },
+
+    /* うすい板（顔のパーツなど）。u,v,w のローカル座標で */
+    poly(pts, col, extra){
+      const n = pts.length; if(n < 3) return api;
+      const S = [];
+      let dz = 0, ar = 0;
+      for(let i=0;i<n;i++){
+        const p = api.pt(pts[i][0], pts[i][1], pts[i][2]);
+        S.push(toScreen(p)); dz += toDepth(p);
+      }
+      for(let i=0;i<n;i++){ const a=S[i], b=S[(i+1)%n]; ar += a[0]*b[1] - b[0]*a[1]; }
+      if(ar >= 0) return api;
+      pushFace(S, col, dz/n + zb + (extra||0));
+      return api;
+    },
+
+    /* 箱。下の半径(hx0,hz0)から上の半径(hx1,hz1)へ、y0からy1まで */
+    box(hx0, hz0, hx1, hz1, y0, y1, col, colTop, colSide){
+      const V = [[-hx0,y0,-hz0],[hx0,y0,-hz0],[hx1,y1,-hz1],[-hx1,y1,-hz1],
+                 [-hx0,y0, hz0],[hx0,y0, hz0],[hx1,y1, hz1],[-hx1,y1, hz1]];
+      const W = [], S = [], D = [];
+      for(let i=0;i<8;i++){
+        const p = api.pt(V[i][0], V[i][1], V[i][2]);
+        W.push(p); S.push(toScreen(p)); D.push(toDepth(p));
+      }
+      const side = colSide || col, top = colTop || col;
+      quad(W,S,D, 4,5,6,7, col);       // 手前
+      quad(W,S,D, 1,0,3,2, side);      // 奥
+      quad(W,S,D, 5,1,2,6, side);      // 右
+      quad(W,S,D, 0,4,7,3, side);      // 左
+      quad(W,S,D, 7,6,2,3, top);       // 上
+      quad(W,S,D, 0,1,5,4, side);      // 下
+      return api;
+    },
+
+    /* n角柱（帽子・木・岩など） */
+    prism(n, r0, r1, y0, y1, col, colTop, turn){
+      const t = turn || 0;
+      const W = [], S = [], D = [];
+      for(let i=0;i<n;i++){
+        const a = t + i * Math.PI*2/n;
+        const cs = Math.cos(a), sn = Math.sin(a);
+        const p0 = api.pt(sn*r0, y0, cs*r0), p1 = api.pt(sn*r1, y1, cs*r1);
+        W.push(p0, p1); S.push(toScreen(p0), toScreen(p1)); D.push(toDepth(p0), toDepth(p1));
+      }
+      for(let i=0;i<n;i++){
+        const a = i*2, b = ((i+1)%n)*2;
+        quad(W,S,D, a, b, b+1, a+1, col);
+      }
+      if(r1 > 0.02){ const ix = []; for(let i=0;i<n;i++) ix.push(i*2+1); ngon(W,S,D, ix, colTop || col); }
+      if(r0 > 0.02){ const ix = []; for(let i=n-1;i>=0;i--) ix.push(i*2);  ngon(W,S,D, ix, col); }
+      return api;
+    },
+
+    /* 地面の影 */
+    shadow(cx, cz, rx, rz, a){
+      const p = api.pt(cx, 0, cz), s = toScreen(p);
+      ctx.beginPath();
+      if(ctx.ellipse) ctx.ellipse(s[0], s[1], rx, rz, 0, 0, Math.PI*2);
+      else ctx.rect(s[0]-rx, s[1]-rz, rx*2, rz*2);
+      ctx.fillStyle = 'rgba(26,22,14,' + (a || 0.2) + ')';
+      ctx.fill();
+      return api;
+    },
+
+    /* ためた面を奥から描く */
+    end(){
+      if(!nF) return;
+      const list = FA.slice(0, nF);
+      nF = 0;
+      list.sort(cmp);
+      for(let i=0;i<list.length;i++) fill(list[i]);
+    },
+    drop(){ nF = 0; }
+  };
+
+  function cmp(a, b){ return a.d - b.d; }
+
+  function fill(f){
+    const P = f.p, n = f.n;
+    let cx = 0, cy = 0;
+    for(let i=0;i<n;i++){ cx += P[i][0]; cy += P[i][1]; }
+    cx /= n; cy /= n;
+    ctx.beginPath();
+    for(let i=0;i<n;i++){
+      const dx = P[i][0]-cx, dy = P[i][1]-cy;
+      const l = Math.sqrt(dx*dx+dy*dy);
+      const e = l > 0.4 ? 0.3/l : 0.6;
+      if(i===0) ctx.moveTo(P[i][0]+dx*e, P[i][1]+dy*e);
+      else      ctx.lineTo(P[i][0]+dx*e, P[i][1]+dy*e);
+    }
+    ctx.closePath();
+    ctx.fillStyle = f.c;
+    ctx.fill();
+  }
+
+  return api;
+})();
+/* =========================================================================
+   顔（表情）
+   ─ 顔のパーツは頭のローカル座標に置いた「うすい板」。
+     頭がまわれば顔もいっしょにまわり、うしろを向けば見えなくなる。
+   ─ 目・まゆ・口はぜんぶ形のデータで持っていて、
+     表情が変わると形そのものが差しかわる。
+   ========================================================================= */
+const FBIAS = 4.0;                       // 顔のパーツは頭より必ず手前に
+
+/* ---- 目：上下のまぶたで切りとった楕円 ---- */
+function eyeOval(rx, ry, topA, topB, botA, botB){
+  const pts = [], n = 10;
+  for(let i=0;i<n;i++){
+    const a = Math.PI*2*i/n;
+    let u = Math.cos(a)*rx, v = Math.sin(a)*ry;
+    const k = u/rx;
+    const t = (topA===undefined ? ry : topA) + (topB||0)*k;
+    const b = (botA===undefined ? -ry : botA) + (botB||0)*k;
+    if(v > t) v = t;
+    if(v < b) v = b;
+    pts.push([u, v]);
+  }
+  return pts;
+}
+/* ---- 弧の帯（口・とじた目） ---- */
+function arcBand(w, bow, th, n){
+  n = n || 6;
+  const lo = [], hi = [];
+  for(let i=0;i<=n;i++){
+    const u = -w + 2*w*i/n, k = u/w;
+    const v = bow*k*k;
+    lo.push([u, v - th]); hi.push([u, v + th]);
+  }
+  const pts = lo.slice();
+  for(let i=hi.length-1;i>=0;i--) pts.push(hi[i]);
+  return pts;
+}
+/* ---- まっすぐな帯（まゆ・めがね） ---- */
+function bar(x0, y0, x1, y1, th){
+  const dx = x1-x0, dy = y1-y0, l = Math.sqrt(dx*dx+dy*dy) || 1;
+  const nx = -dy/l*th, ny = dx/l*th;
+  return [[x0-nx, y0-ny], [x1-nx, y1-ny], [x1+nx, y1+ny], [x0+nx, y0+ny]];
+}
+/* 左右を返す（向きが裏返るので順番も逆にする） */
+function mirX(pts){
+  const o = [];
+  for(let i=pts.length-1;i>=0;i--) o.push([-pts[i][0], pts[i][1]]);
+  return o;
+}
+
+/* ---- 表情の型 ---------------------------------------------------------
+   eye  : 目の形     brow : まゆの形     mouth: 口の形
+   blush: ほお       sweat: あせ         tear : なみだ     mad: 怒りマーク
+   lookU/lookD: 目線
+   ------------------------------------------------------------------- */
+const EXPR = {
+  neutral : {eye:'open',  brow:'flat',  mouth:'line'},
+  calm    : {eye:'soft',  brow:'flat',  mouth:'smileS'},
+  smile   : {eye:'soft',  brow:'up',    mouth:'smile'},
+  grin    : {eye:'open',  brow:'up',    mouth:'grin'},
+  happy   : {eye:'arc',   brow:'up',    mouth:'openSmile', blush:0.30},
+  laugh   : {eye:'arc',   brow:'up',    mouth:'laugh',     blush:0.42},
+  surprise: {eye:'wide',  brow:'high',  mouth:'o'},
+  shock   : {eye:'wide',  brow:'high',  mouth:'oBig',      sweat:1},
+  sad     : {eye:'droop', brow:'sad',   mouth:'frown'},
+  cry     : {eye:'shut',  brow:'sad',   mouth:'wail',      tear:1},
+  angry   : {eye:'sharp', brow:'angry', mouth:'frown2',    mad:1},
+  pout    : {eye:'half',  brow:'angry', mouth:'pout',      blush:0.25},
+  worry   : {eye:'droop', brow:'sad',   mouth:'wavy',      sweat:1},
+  think   : {eye:'half',  brow:'flat',  mouth:'small',     lookU:1},
+  shy     : {eye:'half',  brow:'sad',   mouth:'small',     blush:0.72, lookD:1},
+  sleepy  : {eye:'shut',  brow:'flat',  mouth:'small'},
+  tired   : {eye:'half',  brow:'sad',   mouth:'line',      sweat:0.6},
+  wink    : {eyeL:'arc',  eyeR:'open',  brow:'up',         mouth:'smile', blush:0.25},
+  proud   : {eye:'sharp', brow:'up',    mouth:'smirk'},
+  blink   : {eye:'shut',  brow:'flat',  mouth:'line'}
+};
+
+/* ---- 目の形（side: -1=左目 / +1=右目。外がわがどちらかで形が変わる）
+       lid = まぶたの開き（白目）、iris = 黒目。小さく描くときは黒目だけ。 ---- */
+function eyeShape(kind, rx, ry, side){
+  switch(kind){
+    case 'wide':  return {lid:eyeOval(rx*1.08, ry*1.30), iris:eyeOval(rx*0.84, ry*0.94)};
+    case 'open':  return {lid:eyeOval(rx, ry),           iris:eyeOval(rx*0.86, ry*0.88)};
+    case 'soft':  return {lid:eyeOval(rx, ry*0.88, ry*0.40), iris:eyeOval(rx*0.86, ry*0.70, ry*0.32)};
+    case 'half':  return {lid:eyeOval(rx, ry, ry*0.02), iris:eyeOval(rx*0.86, ry*0.88, ry*0.00)};
+    case 'droop': return {lid:eyeOval(rx, ry, ry*0.30, -ry*0.62*side),
+                          iris:eyeOval(rx*0.86, ry*0.88, ry*0.20, -ry*0.52*side)};
+    case 'sharp': return {lid:eyeOval(rx, ry, ry*0.34,  ry*0.66*side),
+                          iris:eyeOval(rx*0.86, ry*0.88, ry*0.24,  ry*0.56*side)};
+    case 'shut':  return {band:arcBand(rx*1.02, ry*0.42, ry*0.20)};
+    case 'arc':   return {band:arcBand(rx*1.06, -ry*0.66, ry*0.21)};
+  }
+  return {lid:eyeOval(rx, ry), iris:eyeOval(rx*0.86, ry*0.88)};
+}
+/* いま何倍に拡大して描いているか（顔の描きこみの細かさを決める） */
+function ctxScale(){
+  try{ const m = ctx.getTransform(); return Math.abs(m.a) || 1; }catch(e){ return 1; }
+}
+/* ---- まゆ（左目のがわで作り、右は左右を返す） ---- */
+function browShape(kind, w, th){
+  switch(kind){
+    case 'up':    return bar(-w, -th*0.20, w,  th*1.10, th);
+    case 'high':  return bar(-w,  0,       w,  th*0.50, th);
+    case 'sad':   return bar(-w, -th*1.30, w,  th*1.05, th);   // 八の字（内がわが上）
+    case 'angry': return bar(-w,  th*1.20, w, -th*1.15, th);   // 内がわが下
+    default:      return bar(-w,  0,       w,  th*0.22, th);
+  }
+}
+/* ---- 口 ---- */
+function mouthShape(kind, w, h){
+  switch(kind){
+    case 'smile':     return {band:arcBand(w*0.86, h*0.95, h*0.30)};
+    case 'smileS':    return {band:arcBand(w*0.62, h*0.55, h*0.26)};
+    case 'grin':      return {band:arcBand(w*1.00, h*1.15, h*0.36)};
+    case 'openSmile': return {pts:eyeOval(w*0.78, h*1.15, h*0.30), lip:1};
+    case 'laugh':     return {pts:eyeOval(w*0.95, h*1.55, h*0.55), lip:1};
+    case 'o':         return {pts:eyeOval(w*0.42, h*0.95)};
+    case 'oBig':      return {pts:eyeOval(w*0.55, h*1.50)};
+    case 'wail':      return {pts:eyeOval(w*0.80, h*1.50, -h*0.10), lip:1};
+    case 'frown':     return {band:arcBand(w*0.78, -h*0.85, h*0.28)};
+    case 'frown2':    return {band:arcBand(w*0.86, -h*1.05, h*0.32)};
+    case 'pout':      return {band:arcBand(w*0.50, -h*0.90, h*0.34)};
+    case 'small':     return {band:arcBand(w*0.34,  h*0.16, h*0.24)};
+    case 'smirk':     return {band:arcBand(w*0.70,  h*0.80, h*0.26).map(p=>[p[0]+w*0.16, p[1]])};
+    case 'wavy': {
+      const t = h*0.17, X = [-w*0.80,-w*0.27,w*0.27,w*0.80], Y = [-h*0.16,h*0.30,-h*0.30,h*0.16];
+      const o = [];
+      for(let i=0;i<4;i++) o.push([X[i], Y[i]-t]);
+      for(let i=3;i>=0;i--) o.push([X[i], Y[i]+t]);
+      return {pts:o};
+    }
+  }
+  return {band:arcBand(w*0.62, h*0.06, h*0.24)};
+}
+
+/* =========================================================================
+   表情のうつりかわり
+   ========================================================================= */
+const EXPST = {};
+function expOf(id){
+  let e = EXPST[id];
+  if(!e) e = EXPST[id] = {cur:'', hold:0, blink:40+((Math.random()*140)|0), bt:0};
+  return e;
+}
+/* 表情をつける。hold は続くコマ数 */
+function setExp(id, name, hold){
+  if(!id || !EXPR[name]) return;
+  const e = expOf(id);
+  e.cur = name; e.hold = (hold===undefined) ? 300 : hold;
+}
+function clearExp(id){ const e = EXPST[id]; if(e){ e.cur = ''; e.hold = 0; } }
+
+/* いま出す表情の名まえ（まばたきもここで） */
+function expNow(id, base){
+  const e = expOf(id);
+  if(e.hold > 0){ e.hold--; if(e.hold === 0) e.cur = ''; }
+  let k = e.cur || base || 'neutral';
+  if(!EXPR[k]) k = 'neutral';
+  if(e.bt > 0){
+    e.bt--;
+    const s = EXPR[k];
+    if(!(s.eye === 'shut' || s.eye === 'arc' || s.eyeL)) return 'blink';
+  } else if(--e.blink <= 0){
+    e.blink = 90 + ((Math.random()*200)|0); e.bt = 5;
+  }
+  return k;
+}
+
+/* =========================================================================
+   顔を描く（頭のローカル座標のなかで呼ぶ）
+   hw,hh,hd = 頭の半分の大きさ
+   ========================================================================= */
+function drawFace(hw, hh, hd, look, exName, talking, big){
+  const S = EXPR[exName] || EXPR.neutral;
+  const f = look.f || {};
+  const dark = f.eyeCol || '#2b2119';
+  const brc  = f.browCol || look.hair || '#3a2a1a';
+  const z    = hd + 0.05;
+
+  const ew = hw * (f.ew || 0.28);
+  const eh = hh * (f.eh || 0.21);
+  const ex = hw * (f.ex || 0.41);
+  const ey = hh * (f.ey === undefined ? -0.06 : f.ey);
+  const mw = hw * (f.mw || 0.36);
+  const mh = hh * (f.mh || 0.17);
+  const my = -hh * (f.my || 0.62);
+
+  let gy = 0;
+  if(S.lookU) gy =  eh*0.26;
+  if(S.lookD) gy = -eh*0.28;
+
+  const P = (pts, col, u, v, extra)=>{
+    const q = new Array(pts.length);
+    for(let i=0;i<pts.length;i++) q[i] = [pts[i][0]+u, pts[i][1]+v, z];
+    V3.poly(q, col, FBIAS + (extra||0));
+  };
+
+  /* ほお */
+  if(S.blush){
+    const b = 'rgba(226,112,100,' + (0.26 + 0.34*S.blush).toFixed(2) + ')';
+    P(eyeOval(hw*0.25, hh*0.13), b, -hw*0.63, -hh*0.15, -0.1);
+    P(eyeOval(hw*0.25, hh*0.13), b,  hw*0.63, -hh*0.15, -0.1);
+  }
+
+  /* まゆ */
+  const bw = ew*1.02, bt = Math.max(0.11, hh*0.072*(f.browTh || 1));
+  const bk = S.brow || 'flat';
+  const by = ey + eh + hh*(bk === 'high' ? 0.20 : 0.11);
+  const bp = browShape(bk, bw, bt);
+  P(bp, brc, -ex, by, 0.06);
+  P(mirX(bp), brc, ex, by, 0.06);
+
+  /* 目 */
+  drawEye(-1, S.eyeL || S.eye || 'open');
+  drawEye( 1, S.eyeR || S.eye || 'open');
+  function drawEye(side, kind){
+    const sh = eyeShape(kind, ew, eh, side);
+    const ox = side*ex, oy = ey;
+    if(sh.band){ P(sh.band, dark, ox, oy, 0.08); return; }
+    if(big && sh.lid){
+      P(sh.lid, '#f7f3e9', ox, oy, 0.04);
+      P(sh.iris, dark, ox + gy*0.10, oy + gy*0.5, 0.10);
+      P(eyeOval(ew*0.20, eh*0.22), 'rgba(255,255,255,0.90)',
+        ox - ew*0.30, oy + gy*0.5 + eh*0.34, 0.14);
+    } else {
+      /* 小さいときは白目を描くとにじむので、開きの形をそのまま黒でとる */
+      P(sh.lid || sh.iris, dark, ox, oy + gy*0.5, 0.10);
+    }
+    if(f.lash && big){
+      const l = bar(0, 0, ew*0.42, eh*0.30, eh*0.13);
+      P(side < 0 ? mirX(l) : l, dark, ox + side*ew*0.82, oy + eh*0.60, 0.12);
+    }
+  }
+
+  /* 口（しゃべっているあいだは開け閉めする） */
+  let mk = S.mouth || 'line';
+  if(talking && ((frameCount >> 2) & 3) < 2)
+    mk = (mk === 'smile' || mk === 'grin' || mk === 'smileS') ? 'openSmile' :
+         (mk === 'line'  || mk === 'small') ? 'o' : mk;
+  const ms = mouthShape(mk, mw, mh);
+  if(ms.band) P(ms.band, dark, 0, my, 0.06);
+  else {
+    P(ms.pts, '#59292a', 0, my, 0.06);
+    if(ms.lip) P(eyeOval(mw*0.48, mh*0.32, -mh*0.02), '#d4615c', 0, my - mh*0.52, 0.10);
+  }
+
+  /* あせ・なみだ・怒りマーク */
+  if(S.sweat){
+    const t = (frameCount % 96)/96;
+    P([[0, hh*0.26], [-hw*0.11, hh*0.06], [hw*0.11, hh*0.06]], 'rgba(148,212,240,0.92)',
+      hw*0.82, hh*0.28 - t*hh*0.5, 0.2);
+  }
+  if(S.tear){
+    const t = (frameCount % 64)/64;
+    for(const s of [-1, 1])
+      P(eyeOval(hw*0.09, hh*0.15), 'rgba(148,212,240,0.94)',
+        s*ex, ey - eh - hh*0.18 - t*hh*0.6, 0.2);
+  }
+  if(S.mad){
+    const c = '#d2483c', r = hw*0.19;
+    P(bar(-r, r, r, -r, r*0.28), c, hw*0.60, hh*0.54, 0.2);
+    P(bar(-r, -r, r, r, r*0.28), c, hw*0.60, hh*0.54, 0.2);
+  }
+  /* めがね */
+  if(look.glasses){
+    const g = '#3b3b40', r = ew*1.34, h2 = eh*1.20, t = Math.max(0.10, hh*0.032);
+    for(const s of [-1, 1]){
+      const ox = s*ex;
+      if(big) P(eyeOval(r, h2), 'rgba(198,224,240,0.20)', ox, ey, 0.30);
+      P(bar(-r,  h2, r,  h2, t), g, ox, ey, 0.34);
+      P(bar(-r, -h2, r, -h2, t), g, ox, ey, 0.34);
+      P(bar(-r, -h2, -r, h2, t), g, ox, ey, 0.34);
+      P(bar( r, -h2,  r, h2, t), g, ox, ey, 0.34);
+    }
+    P(bar(-ex + r, ey, ex - r, ey, t), g, 0, 0, 0.34);
+  }
+}
+/* =========================================================================
+   人のかたち（モデリング）
+   ─ 箱を組みあげて体をつくる。関節はぜんぶ入れ子の回転。
+   ─ からだつき・髪・服・持ちものは、キャラごとの表にしたがって変える。
+   ========================================================================= */
+/* 体の寸法。奥ゆき（hd,sd）は幅より浅くしてある。
+   このカメラでは奥ゆきがそのまま画面の高さに出るので、
+   実物どおりの厚みにすると頭が箱に見えてしまうため。 */
+const BUILD = {
+  chibi : {hh:2.20, hw:2.58, hd:1.34, neck:0.26, tor:3.17, sh:2.03, sd:0.97, leg:3.77, lw:0.78, foot:0.53, arm:3.2, aw:0.58},
+  kid   : {hh:2.20, hw:2.62, hd:1.36, neck:0.34, tor:4.30, sh:2.25, sd:1.05, leg:4.60, lw:0.82, foot:0.59, arm:4.3, aw:0.62},
+  kidbig: {hh:2.26, hw:2.66, hd:1.39, neck:0.38, tor:4.15, sh:2.51, sd:1.14, leg:5.13, lw:0.89, foot:0.63, arm:4.6, aw:0.67},
+  girl  : {hh:2.16, hw:2.55, hd:1.33, neck:0.34, tor:3.70, sh:2.08, sd:0.97, leg:4.53, lw:0.75, foot:0.56, arm:4.2, aw:0.57},
+  teen  : {hh:2.21, hw:2.57, hd:1.34, neck:0.47, tor:4.45, sh:2.31, sd:1.01, leg:5.73, lw:0.80, foot:0.60, arm:5.3, aw:0.60},
+  adult : {hh:2.26, hw:2.64, hd:1.38, neck:0.53, tor:4.83, sh:2.78, sd:1.21, leg:5.96, lw:0.92, foot:0.68, arm:5.8, aw:0.71},
+  stout : {hh:2.32, hw:2.71, hd:1.42, neck:0.41, tor:4.75, sh:3.03, sd:1.40, leg:5.35, lw:1.03, foot:0.72, arm:5.6, aw:0.78},
+  plump : {hh:2.26, hw:2.67, hd:1.40, neck:0.38, tor:4.52, sh:2.89, sd:1.36, leg:4.98, lw:0.98, foot:0.69, arm:5.3, aw:0.74},
+  old   : {hh:2.21, hw:2.58, hd:1.35, neck:0.41, tor:4.30, sh:2.47, sd:1.11, leg:5.20, lw:0.84, foot:0.65, arm:5.2, aw:0.64, hunch:0.22}
+};
+
+/* ---- キャラごとのつくり ---------------------------------------------
+   build : からだつき      hair : 髪型        wear : 服のかたち
+   acc   : 持ちもの        f    : 顔のつくり  idle : ふだんの表情
+   ------------------------------------------------------------------- */
+const CH3 = {
+  me     : {build:'kid',    hair:'messy', wear:'shirt',  hatType:'straw', idle:'neutral',
+            f:{ew:0.31, eh:0.25, ex:0.42, mw:0.34}},
+  aunt   : {build:'plump',  hair:'bun',   wear:'apron',  idle:'smile',
+            f:{ew:0.27, eh:0.18, ey:-0.04, browTh:0.9, mw:0.40}},
+  uncle  : {build:'adult',  hair:'crop',  wear:'shirt',  acc:['towelN'], idle:'calm',
+            f:{ew:0.26, eh:0.17, browTh:1.5, mw:0.40, my:0.64}},
+  sister : {build:'teen',   hair:'long',  wear:'onepiece', idle:'calm',
+            f:{ew:0.30, eh:0.24, lash:1, browTh:0.8, mw:0.32}},
+  taku   : {build:'kid',    hair:'messy', wear:'shirt',  idle:'grin',
+            f:{ew:0.33, eh:0.27, ex:0.43, browTh:1.2, mw:0.38}},
+  minoru : {build:'kid',    hair:'short', wear:'shirt',  idle:'neutral',
+            f:{ew:0.28, eh:0.21, mw:0.34}},
+  kidA   : {build:'kid',    hair:'crop',  wear:'shirt',  idle:'grin',
+            f:{ew:0.32, eh:0.24, browTh:1.2}},
+  kidB   : {build:'chibi',  hair:'short', wear:'shirt',  idle:'happy',
+            f:{ew:0.34, eh:0.28, ex:0.40, mw:0.36}},
+  yocchan: {build:'girl',   hair:'bob',   wear:'onepiece', idle:'calm',
+            f:{ew:0.29, eh:0.23, lash:1, mw:0.30}},
+  mutsu  : {build:'kidbig', hair:'crop',  wear:'shirt',  idle:'neutral',
+            f:{ew:0.27, eh:0.20, browTh:1.4, mw:0.38}},
+  fisher : {build:'stout',  hair:'crop',  wear:'shirt',  hatType:'straw', acc:['towelN'], idle:'calm',
+            f:{ew:0.25, eh:0.16, browTh:1.6, mw:0.42, my:0.64}},
+  oldman : {build:'old',    hair:'bald',  wear:'jinbei', idle:'calm',
+            f:{ew:0.25, eh:0.15, browTh:1.7, browCol:'#cfc9bb', mw:0.36, my:0.66}},
+  sachi  : {build:'girl',   hair:'long',  wear:'onepiece', idle:'shy',
+            f:{ew:0.31, eh:0.26, lash:1, browTh:0.8, mw:0.28}},
+  nobu   : {build:'teen',   hair:'pony',  wear:'onepiece', idle:'smile',
+            f:{ew:0.29, eh:0.23, lash:1, browTh:0.9, mw:0.32}},
+  denki  : {build:'adult',  hair:'bald',  wear:'shirt',  glasses:1, idle:'neutral',
+            f:{ew:0.26, eh:0.17, browTh:1.3, mw:0.36}},
+  shopman: {build:'stout',  hair:'crop',  wear:'apron',  idle:'smile',
+            f:{ew:0.26, eh:0.18, browTh:1.4, mw:0.40}},
+  toudai : {build:'adult',  hair:'crop',  wear:'shirt',  hatType:'cap', idle:'calm',
+            f:{ew:0.26, eh:0.18, browTh:1.3, mw:0.36}},
+  post   : {build:'adult',  hair:'crop',  wear:'shirt',  hatType:'cap', acc:['bag'], idle:'smile',
+            f:{ew:0.27, eh:0.20, browTh:1.1, mw:0.36}}
+};
+
+/* look（もとの色データ）と CH3 をまぜて、組み立てに使う一式にする */
+function spec3(p){
+  let s = p.__s3;
+  if(!s || s.__v !== p.__v3){
+    const c = CH3[p.id] || {};
+    const style = p.style;
+    s = p.__s3 = {
+      __v: p.__v3,
+      build: c.build || (p.tall >= 2 ? 'adult' : 'kid'),
+      hair: c.hair || (style === 'long' ? 'long' : style === 'bald' ? 'bald' :
+                       style === 'bun' ? 'bun' : 'short'),
+      wear: c.wear || 'shirt',
+      hatType: c.hatType || (p.tall >= 2 ? 'cap' : 'straw'),
+      acc: c.acc || null,
+      glasses: c.glasses || 0,
+      idle: c.idle || (p.smile ? 'smile' : 'neutral'),
+      f: c.f || null,
+      useTall: !c.build
+    };
+  }
+  return s;
+}
+
+/* =========================================================================
+   髪
+   ========================================================================= */
+/* 頭のてっぺんは丸くおさめる。角ばった箱のままだと帽子に見えてしまう。 */
+function hairCrown(hw, hh, hd, col, y0, y1, k){
+  k = k || 1;
+  const m = y0 + (y1 - y0)*0.60;
+  V3.box(hw*1.05*k, hd*1.08*k, hw*1.03*k, hd*1.06*k, y0, m, col);
+  V3.box(hw*1.03*k, hd*1.06*k, hw*0.66*k, hd*0.68*k, m, y1, col, col);
+}
+function build3Hair(style, hw, hh, hd, col){
+  const dk = col;
+  const HL = hh*0.56;                                  // 生えぎわ。これより下は顔
+  /* うしろ髪の土台（えり足まで） */
+  const nape = (y0, zk, wk)=>{
+    V3.push().move(0, 0, -hd*(zk===undefined?0.42:zk));
+    V3.box(hw*1.03*(wk||1), hd*0.66, hw*1.02*(wk||1), hd*0.64, y0, HL + hh*0.14, dk);
+    V3.pop();
+  };
+  /* 前がみ（額にかかるひとふさ。まゆには重ならない高さで止める） */
+  const bang = (x0, x1, drop)=>{
+    V3.push().move((x0+x1)/2*hw, HL - hh*(drop||0.06), hd*0.94);
+    V3.box(hw*(x1-x0)/2, hd*0.16, hw*(x1-x0)/2, hd*0.16, 0, hh*0.52, dk);
+    V3.pop();
+  };
+  switch(style){
+    case 'bald':
+      V3.push().move(0, 0, -hd*0.12);
+      V3.box(hw*1.04, hd*0.98, hw*1.00, hd*0.92, -hh*0.12, hh*0.46, dk);
+      V3.pop();
+      break;
+    case 'crop':                                       // 短く刈った髪
+      hairCrown(hw, hh, hd, dk, HL, hh*1.04);
+      nape(-hh*0.04);
+      break;
+    case 'messy':                                      // ぼさぼさ
+      hairCrown(hw, hh, hd, dk, HL - hh*0.04, hh*1.06);
+      nape(-hh*0.16);
+      bang(-0.96, -0.10, 0.05);
+      bang(0.30, 0.94, 0.00);
+      V3.push().move(-hw*0.46, hh*0.98, hd*0.02).rotZ(0.6).rotX(-0.3);
+      V3.box(hw*0.26, hd*0.36, hw*0.05, hd*0.08, 0, hh*0.60, dk); V3.pop();
+      V3.push().move(hw*0.54, hh*0.94, -hd*0.30).rotZ(-0.75).rotX(0.24);
+      V3.box(hw*0.22, hd*0.32, hw*0.04, hd*0.07, 0, hh*0.52, dk); V3.pop();
+      break;
+    case 'bun':                                        // まとめ髪
+      hairCrown(hw, hh, hd, dk, HL, hh*1.02);
+      nape(-hh*0.26, 0.44);
+      for(const s of [-1, 1]){                         // 耳の前におりる後れ毛
+        V3.push().move(s*hw*0.94, 0, hd*0.06);
+        V3.box(hw*0.20, hd*0.66, hw*0.22, hd*0.74, -hh*0.50, hh*0.66, dk);
+        V3.pop();
+      }
+      V3.push().move(0, hh*0.84, -hd*1.05).sc(1, 1, 0.75);
+      V3.prism(6, hw*0.46, hw*0.52, 0, hh*0.28, dk, dk);
+      V3.prism(6, hw*0.52, hw*0.12, hh*0.28, hh*0.58, dk, dk);
+      V3.pop();
+      break;
+    case 'long':                                       // 長い髪
+      hairCrown(hw, hh, hd, dk, HL - hh*0.02, hh*1.04);
+      bang(-0.98, 0.98, 0.04);
+      V3.push().move(0, 0, -hd*1.02);                  // 背中までのうしろ髪
+      V3.box(hw*1.02, hd*0.44, hw*1.08, hd*0.46, -hh*2.9, hh*0.98, dk);
+      V3.pop();
+      for(const s of [-1, 1]){                         // 顔の横におりる髪
+        V3.push().move(s*hw*1.00, 0, -hd*0.10);
+        V3.box(hw*0.24, hd*1.00, hw*0.26, hd*1.06, -hh*2.0, hh*0.96, dk);
+        V3.pop();
+      }
+      break;
+    case 'pony':                                       // ポニーテール
+      hairCrown(hw, hh, hd, dk, HL, hh*1.04);
+      bang(-0.94, 0.34, 0.02);
+      nape(-hh*0.34, 0.52);
+      for(const s of [-1, 1]){
+        V3.push().move(s*hw*0.98, 0, -hd*0.14);
+        V3.box(hw*0.20, hd*0.86, hw*0.22, hd*0.92, -hh*0.56, hh*0.94, dk);
+        V3.pop();
+      }
+      V3.push().move(0, hh*0.58, -hd*1.30).rotX(0.5);  // 束ねた毛先
+      V3.box(hw*0.38, hw*0.30, hw*0.20, hw*0.17, -hh*2.2, 0, dk); V3.pop();
+      break;
+    case 'bob':                                        // おかっぱ
+      hairCrown(hw, hh, hd, dk, HL - hh*0.02, hh*1.04);
+      bang(-0.98, 0.98, 0.05);
+      V3.push().move(0, 0, -hd*1.00);
+      V3.box(hw*1.04, hd*0.42, hw*1.06, hd*0.44, -hh*1.05, hh*0.98, dk);
+      V3.pop();
+      for(const s of [-1, 1]){
+        V3.push().move(s*hw*1.01, 0, -hd*0.06);
+        V3.box(hw*0.24, hd*1.02, hw*0.24, hd*1.08, -hh*0.92, hh*0.96, dk);
+        V3.pop();
+      }
+      break;
+    default:                                           // ふつうの短い髪
+      hairCrown(hw, hh, hd, dk, HL, hh*1.03);
+      nape(-hh*0.08);
+      bang(-0.92, 0.20, 0.04);
+  }
+}
+
+/* =========================================================================
+   かぶりもの
+   ========================================================================= */
+function build3Hat(kind, hw, hh, hd, col){
+  const dark = col;
+  if(kind === 'cap'){
+    V3.push().move(0, hh*0.62, -hd*0.06);
+    V3.prism(8, hw*1.10, hw*0.86, 0, hh*0.72, dark, dark, Math.PI/8);
+    V3.pop();
+    V3.push().move(0, hh*0.66, hd*1.02);                 // つば
+    V3.box(hw*0.92, hd*0.62, hw*0.72, hd*0.62, 0, hh*0.10, dark);
+    V3.pop();
+  } else if(kind === 'towelH'){
+    V3.push().move(0, hh*0.30, 0);
+    V3.box(hw*1.12, hd*1.12, hw*0.92, hd*0.92, 0, hh*0.86, dark);
+    V3.pop();
+    for(const s of [-1, 1]){
+      V3.push().move(s*hw*1.06, 0, 0);
+      V3.box(hd*0.12, hd*0.94, hd*0.12, hd*0.86, -hh*0.5, hh*1.0, dark);
+      V3.pop();
+    }
+  } else {                                               // 麦わら帽子
+    V3.push().move(0, hh*0.74, 0);
+    V3.prism(10, hw*2.05, hw*1.90, 0, hh*0.10, dark, dark);          // つば
+    V3.prism(10, hw*1.14, hw*0.88, hh*0.06, hh*0.86, dark, dark);    // 山
+    V3.push().move(0, hh*0.30, 0);
+    V3.prism(10, hw*1.18, hw*1.18, 0, hh*0.12, '#b8763c', '#b8763c');// リボン
+    V3.pop();
+    V3.pop();
+  }
+}
+
+/* =========================================================================
+   ひとり分を組み立てて描く
+   sx,sy … もとのドット絵と同じ左上位置（16x16のマスの左上）
+   ========================================================================= */
+/* 首から上をひとまとめに組む。
+   歩いている人にも、会話中のバストアップにも、同じ形を使う。 */
+function build3Head(hw, hh, hd, skin, s, look, ex, talking, big){
+  V3.box(hw*0.93, hd*0.93, hw, hd, -hh, hh*0.62, skin);
+  V3.box(hw, hd, hw*0.74, hd*0.76, hh*0.60, hh*0.94, skin, skin);
+  for(const side of [-1, 1]){                       // 耳
+    V3.push().move(side*hw*0.98, -hh*0.04, -hd*0.10);
+    V3.box(hd*0.20, hd*0.42, hd*0.18, hd*0.36, -hh*0.22, hh*0.22, skin);
+    V3.pop();
+  }
+  V3.push().move(0, -hh*0.10, hd*0.98);             // 鼻
+  V3.box(hw*0.13, hd*0.14, hw*0.10, hd*0.12, -hh*0.10, hh*0.08, skin);
+  V3.pop();
+  build3Hair(s.hair, hw, hh, hd, look.hair || '#3a2a1a');
+  if(V3.front() > 0.06)
+    drawFace(hw, hh, hd, {skin:skin, hair:look.hair, f:s.f, glasses:s.glasses}, ex, talking, big);
+  if(look.hat) build3Hat(s.hatType, hw, hh, hd, look.hat);
+}
+
+function drawPerson3(sx, sy, dir, walk, p){
+  const s = spec3(p);
+  const b = BUILD[s.build] || BUILD.kid;
+  const tall = s.useTall ? (p.tall || 0) * 0.6 : 0;
+
+  const hh = b.hh, hw = b.hw, hd = b.hd;
+  const leg = b.leg + tall, tor = b.tor + tall*0.6, foot = b.foot;
+  const hipY = foot + leg;
+  const skin = p.skin || C.skin;
+  const hair = p.hair || '#3a2a1a';
+  const cloth = p.cloth || '#5a8ac0', cloth2 = p.cloth2 || '#3a5f8a';
+  const legc = p.legs || '#c8b78c', shoe = p.shoe || '#3d332a';
+
+  /* --- 向き --- */
+  const yaw = dir === 1 ? Math.PI : dir === 2 ? -Math.PI/2 : dir === 3 ? Math.PI/2 : 0;
+
+  /* --- 歩き --- */
+  let ph = 0, moving = false;
+  if(typeof p.ph === 'number'){ ph = p.ph; moving = p.moving !== false; }
+  else if(walk === true){ ph = 0.25; moving = true; }
+  else if(walk){ ph = ((walk|0) & 3) * 0.25; moving = true; }
+  if(p.moving === false) moving = false;
+
+  const th = ph * Math.PI * 2;
+  const swing = moving ? Math.sin(th) : 0;
+  const idT = frameCount*0.045 + (p.seed || 0);
+  const breathe = moving ? 0 : Math.sin(idT)*0.10;
+  const bob = moving ? Math.abs(Math.cos(th))*0.40 - 0.20 : breathe;
+  const lean = moving ? 0.09 : (b.hunch || 0) * 0.9;
+
+  /* --- 表情 --- */
+  const id = p.id || '';
+  let base = id ? baseExp(id) : (p.exp || s.idle);
+  if(p.near != null && id && id !== 'me' && base === 'neutral' &&
+     G && G.npc && (G.npc[id] || 0) >= 2) base = 'smile';
+  const ex = id ? expNow(id, base) : base;
+  const talking = id && talkFace === id && typing;
+  const big = ctxScale() >= 1.9;
+
+  V3.begin(sx + 8, sy + 16);
+  V3.shadow(0, 0, hw*1.5, hw*1.5*0.5, 0.20);
+  V3.rotY(yaw);
+
+  V3.move(0, hipY + bob, 0);
+
+  /* --- あし --- */
+  for(const side of [-1, 1]){
+    const a = moving ? swing*side*0.52 : (b.hunch ? 0.04 : 0);
+    V3.push();
+    V3.move(side*b.lw*1.15, 0, 0).rotX(a);
+    V3.box(b.lw, b.lw*0.94, b.lw*0.92, b.lw*0.88, -leg, 0.4, legc);
+    V3.push().move(0, -leg, b.lw*0.30);
+    V3.box(b.lw*1.02, b.lw*1.25, b.lw*0.98, b.lw*1.15, -foot, 0.1, shoe);
+    V3.pop();
+    V3.pop();
+  }
+
+  /* --- からだ --- */
+  V3.rotX(lean*0.5);
+  buildTorso();
+
+  V3.end();
+
+  function buildTorso(){
+    const w = s.wear;
+    /* 胴 */
+    if(w === 'onepiece'){
+      V3.box(b.sh*0.94, b.sd*0.94, b.sh, b.sd, tor*0.34, tor, cloth);
+      V3.box(b.sh*1.28, b.sd*1.18, b.sh*0.94, b.sd*0.94, -tor*0.05, tor*0.35, cloth, cloth2, cloth);
+    } else if(w === 'jinbei'){
+      V3.box(b.sh*1.02, b.sd*1.00, b.sh, b.sd, 0, tor, cloth, cloth2);
+      V3.push().move(0, tor*0.30, 0);
+      V3.box(b.sh*1.05, b.sd*1.03, b.sh*1.05, b.sd*1.03, 0, tor*0.16, cloth2);
+      V3.pop();
+    } else {
+      V3.box(b.sh*0.92, b.sd*0.92, b.sh, b.sd, 0, tor, cloth, cloth2);
+      if(p.stripe){
+        for(const yy of [0.30, 0.56, 0.82]){
+          V3.push().move(0, tor*yy, 0);
+          V3.box(b.sh*0.97, b.sd*0.97, b.sh*0.99, b.sd*0.99, 0, tor*0.09, cloth2);
+          V3.pop();
+        }
+      }
+      V3.push().move(0, 0, 0);                     // すそ
+      V3.box(b.sh*0.93, b.sd*0.93, b.sh*0.95, b.sd*0.95, -0.15, tor*0.10, cloth2);
+      V3.pop();
+    }
+    if(w === 'apron'){
+      V3.push().move(0, 0, b.sd*0.98);
+      V3.box(b.sh*0.80, b.sd*0.06, b.sh*0.56, b.sd*0.06, -tor*0.12, tor*0.86, '#efe7d2');
+      V3.pop();
+    }
+    /* えり */
+    V3.push().move(0, tor*0.94, 0);
+    V3.box(b.sh*1.01, b.sd*1.01, b.sh*0.62, b.sd*0.66, 0, tor*0.08, cloth2);
+    V3.pop();
+
+    /* --- うで ---
+       ラジオ体操のように腕の形を指定されたときは、そちらを優先する。 */
+    const AP = p.armPose;
+    for(const side of [-1, 1]){
+      const a = moving ? -swing*side*0.46 : (Math.sin(idT + side)*0.03);
+      let az = -side*0.09;
+      if(AP === 1) az = side*Math.PI*0.97;                     // 上にあげる
+      else if(AP === 2) az = side*Math.PI*0.50;                // 横にひらく
+      else if(AP === 3) az = side < 0 ? -Math.PI*0.97 : -0.09; // かたほうだけ上
+      V3.push();
+      V3.move(side*(b.sh + b.aw*0.42), tor*0.90, 0).rotZ(az).rotX(AP ? 0 : a);
+      V3.box(b.aw, b.aw*0.95, b.aw*0.92, b.aw*0.9, -b.arm*0.48, 0.35, cloth);   // そで
+      V3.box(b.aw*0.86, b.aw*0.84, b.aw*0.80, b.aw*0.80, -b.arm, -b.arm*0.46, skin);
+      V3.pop();
+    }
+
+    /* --- 首と頭 --- */
+    V3.push();
+    V3.move(0, tor + b.neck*0.4, 0);
+    V3.box(b.aw*0.72, b.aw*0.72, b.aw*0.70, b.aw*0.70, -b.neck*0.5, b.neck*0.6, skin);
+    let hy = Math.abs(yaw) > 2.0 ? 0 : -yaw*0.34;
+    if(!moving) hy += Math.sin(idT*0.45)*0.10;
+    if(p.near != null && !moving){                   // そばの人のほうを見る
+      let d = p.near - yaw;
+      while(d >  Math.PI) d -= Math.PI*2;
+      while(d < -Math.PI) d += Math.PI*2;
+      hy = clamp(d, -1.0, 1.0);
+    }
+    V3.move(0, b.neck*0.6 + hh, 0).rotY(hy).rotX(-lean*0.5 + (b.hunch ? 0.10 : 0));
+    build3Head(hw, hh, hd, skin, s, p, ex, talking, big);
+    if(s.acc && s.acc.indexOf('towelN') >= 0){
+      V3.push().move(0, -hh*1.05, 0);
+      V3.box(hw*0.86, hd*0.86, hw*0.80, hd*0.80, -0.5, 0.5, '#efe7d2');
+      V3.push().move(0, 0, hd*0.70);
+      V3.box(hw*0.34, hd*0.10, hw*0.30, hd*0.10, -2.2, 0.3, '#efe7d2');
+      V3.pop(); V3.pop();
+    }
+    V3.pop();
+
+    if(s.acc && s.acc.indexOf('bag') >= 0){
+      V3.push().move(b.sh*0.95, tor*0.28, -b.sd*0.5).rotY(0.2);
+      V3.box(b.sh*0.52, b.sd*0.30, b.sh*0.52, b.sd*0.30, 0, tor*0.42, '#6b5a3e', '#8a7450');
+      V3.pop();
+    }
+  }
+}
+
+/* =========================================================================
+   ねこ
+   ========================================================================= */
+function drawCat3(sx, sy, dir, walk){
+  const c = '#c8a06a', d = '#8a6a3a', dk = '#7a5a30';
+  const yaw = dir === 1 ? Math.PI : dir === 2 ? -Math.PI/2 : dir === 3 ? Math.PI/2 : 0;
+  const t = frameCount*0.06;
+  const ex = expNow('cat', 'calm');
+  const shut = EXPR[ex] && (EXPR[ex].eye === 'shut' || EXPR[ex].eye === 'arc');
+
+  V3.begin(sx + 8, sy + 16);
+  V3.shadow(0, 0, 4.6, 2.6, 0.20);
+  V3.rotY(yaw);
+  /* あし */
+  for(const ax of [-1, 1]) for(const az of [-1, 1]){
+    V3.push().move(ax*1.15, 0, az*2.2);
+    V3.box(0.44, 0.44, 0.40, 0.40, 0, 2.2, d);
+    V3.pop();
+  }
+  /* からだ（低くて長い） */
+  V3.box(1.60, 3.0, 1.54, 2.9, 1.9, 4.0 + Math.sin(t)*0.08, c, c);
+  V3.push().move(0, 3.4, -2.9).rotX(-1.22 + Math.sin(t*0.7)*0.28);     // しっぽ
+  V3.box(0.40, 0.40, 0.26, 0.26, 0, 3.3, d);
+  V3.pop();
+  /* あたま */
+  V3.push().move(0, 3.1, 3.0);
+  V3.box(1.28, 1.00, 1.22, 0.94, 0, 2.05, c, c);
+  for(const s2 of [-1, 1]){                                             // 耳
+    V3.push().move(s2*0.74, 2.0, -0.05);
+    V3.prism(3, 0.46, 0.04, 0, 0.85, d, d);
+    V3.pop();
+  }
+  V3.push().move(0, 1.10, 0.97);                                        // 顔
+  if(V3.front() > 0.05){
+    const eye = shut ? arcBand(0.34, -0.16, 0.11) : eyeOval(0.26, 0.34);
+    V3.poly(eye.map(q=>[q[0]-0.52, q[1], 0.05]), '#2b2119', FBIAS);
+    V3.poly(eye.map(q=>[q[0]+0.52, q[1], 0.05]), '#2b2119', FBIAS);
+    V3.poly(eyeOval(0.17, 0.12).map(q=>[q[0], q[1]-0.62, 0.05]), '#d4776a', FBIAS);
+    V3.poly(arcBand(0.30, -0.14, 0.08).map(q=>[q[0], q[1]-0.88, 0.05]), '#2b2119', FBIAS);
+    for(const s2 of [-1, 1])                                            // ひげ
+      V3.poly(bar(0, 0, s2*0.9, 0.06, 0.05).map(q=>[q[0]+s2*0.72, q[1]-0.6, 0.05]),
+              'rgba(60,48,36,0.6)', FBIAS);
+  }
+  V3.pop();
+  V3.pop();
+  V3.end();
+}
+/* =========================================================================
+   草木・岩・鳥居（立体）
+   ─ カメラが動かないので、一度だけ立体で描いて絵にしておき、あとは貼るだけ。
+     おかげで木がいくら並んでも重くならない。
+   ========================================================================= */
+const PROPS = {};
+function propSprite(key, w, h, ax, ay, build){
+  let s = PROPS[key];
+  if(s) return s;
+  const cvs = document.createElement('canvas');
+  cvs.width = w; cvs.height = h;
+  let g = null;
+  try{ g = cvs.getContext('2d'); }catch(e){ g = null; }
+  if(!g){ s = PROPS[key] = null; return null; }
+  const old = ctx;
+  ctx = g;
+  try{ V3.begin(ax, ay); build(); V3.end(); }
+  catch(e){ V3.drop(); }
+  ctx = old;
+  s = PROPS[key] = {c:cvs, ax:ax, ay:ay};
+  return s;
+}
+function blitProp(s, fx, fy){ if(s) ctx.drawImage(s.c, (fx - s.ax)|0, (fy - s.ay)|0); }
+
+/* マスの上に立体の草木を置く。同じ絵ばかりにならないよう、
+   マスの位置から選んだ4種類を、少しずらして立てる。 */
+function propAt(kind, gx, gy){
+  const h = hash2(gx*3+7, gy*5+11), v = (h*4)|0;
+  let s = null, dy = 14;
+  if(kind === 'T'){ s = propSprite('T'+v, 36, 34, 18, 29, ()=>buildTree(v)); }
+  else if(kind === 'B'){ s = propSprite('B'+v, 24, 18, 12, 13, ()=>buildBush(v)); dy = 13; }
+  else { s = propSprite('R'+v, 22, 16, 11, 11, ()=>buildRock(v)); dy = 13; }
+  blitProp(s, gx*16 + 8 + ((h*5)|0) - 2, MAPY + gy*16 + dy + ((hash2(gy,gx)*3)|0) - 1);
+}
+
+/* ---- 木 ----
+   葉のかたまりは奥ゆきを 0.62 に縮めてある。
+   このカメラは上の面がそのまま画面に出るので、
+   まん丸のままだと上から見た円ばかりが目立ってしまう。 */
+const DZ = 0.62;
+function buildTree(v){
+  V3.rotZ((v - 1.5) * 0.045).rotY(v * 1.1);
+  V3.push().sc(1, 1, DZ);
+  V3.prism(6, 1.5, 1.0, 0, 7.2/1, C.trunk, C.trunk2);
+  V3.pop();
+  const g1 = v & 1 ? C.tree : C.tree2, g2 = v & 1 ? C.tree2 : C.tree;
+  V3.push().sc(1, 1, DZ);
+  V3.prism(8, 4.4, 8.2, 5.4, 9.0, C.tree3, g2, 0.2);
+  V3.prism(8, 8.2, 6.9, 9.0, 12.6, g2, g2, 0.2);
+  V3.prism(8, 6.9, 1.3, 12.6, 16.6, g1, g1, 0.2);
+  V3.pop();
+  V3.push().move(-3.4, 0, 1.5).rotY(0.6).sc(1, 1, DZ);
+  V3.prism(6, 3.2, 3.7, 8.4, 10.6, g1, g1);
+  V3.prism(6, 3.7, 0.8, 10.6, 13.2, g1, g1);
+  V3.pop();
+  V3.push().move(3.7, 0, -1.1).rotY(-0.4).sc(1, 1, DZ);
+  V3.prism(6, 2.8, 3.3, 9.4, 11.5, g2, g1);
+  V3.prism(6, 3.3, 0.7, 11.5, 14.0, g1, g1);
+  V3.pop();
+}
+/* ---- しげみ ---- */
+function buildBush(v){
+  V3.rotY(v * 0.8).sc(1, 1, DZ);
+  V3.prism(7, 3.4, 5.0, 0, 2.4, C.tree3, C.tree2);
+  V3.prism(7, 5.0, 1.2, 2.4, 5.6, C.tree2, C.tree);
+  V3.push().move(2.6, 0, 1.6).rotY(0.5);
+  V3.prism(6, 2.4, 2.8, 0.9, 2.7, C.tree2, C.tree);
+  V3.prism(6, 2.8, 0.6, 2.7, 4.6, C.tree, C.tree);
+  V3.pop();
+}
+/* ---- 岩 ---- */
+function buildRock(v){
+  V3.rotY(v * 0.9).sc(1, 1, DZ);
+  V3.prism(6, 5.2, 4.4, 0, 2.0, C.stone3, C.stone2);
+  V3.prism(6, 4.4, 2.6, 2.0, 4.1, C.stone2, C.stone);
+  V3.push().move(1.4, 0, 1.0).rotY(0.7);
+  V3.prism(5, 2.2, 1.0, 3.4, 5.0, C.stone, C.stone);
+  V3.pop();
+}
+/* ---- 鳥居 ---- */
+function buildTorii(span){
+  const h = 24, r = 1.7, k = C.torii, k2 = '#8f3a2c';
+  for(const s of [-1, 1]){
+    V3.push().move(s*span/2, 0, 0);
+    V3.box(r*1.5, r*1.5, r*1.4, r*1.4, 0, 1.2, '#8a8478');            // 根もとの石
+    V3.prism(8, r, r*0.86, 1.0, h, k, k2);
+    V3.pop();
+  }
+  V3.push().move(0, h*0.72, 0);                                        // 貫
+  V3.box(span/2 + 3, r*0.7, span/2 + 3, r*0.7, 0, 2.2, k, '#d4604a', k2);
+  V3.pop();
+  V3.push().move(0, h, 0);                                             // 島木
+  V3.box(span/2 + 9, r*1.15, span/2 + 9, r*1.15, 0, 2.4, k, k2, k2);
+  V3.pop();
+  V3.push().move(0, h + 2.4, 0);                                       // 笠木
+  V3.box(span/2 + 12, r*1.5, span/2 + 12, r*1.35, 0, 2.6, '#d4604a', '#d4604a', k);
+  V3.pop();
+  V3.push().move(0, h*0.74, 0);                                        // 額束
+  V3.box(2.4, r*0.8, 2.4, r*0.8, 0, h*0.26, k, k2, k2);
+  V3.pop();
+}
+
+/* =========================================================================
+   会話中の顔（バストアップ）
+   ========================================================================= */
+let talkFace = '';            // いましゃべっている人
+let talkLook = null;
+
+function bustLook(id){
+  if(id === 'me') return meLook();
+  const d = NPCS[id];
+  return d ? d.look : null;
+}
+function drawBust(){
+  if(!talkFace || !talkLook) return;
+  const s = spec3(talkLook), b = BUILD[s.build] || BUILD.kid;
+  const hw = b.hw, hh = b.hh, hd = b.hd;
+  const skin = talkLook.skin || C.skin, hair = talkLook.hair || '#3a2a1a';
+  const ex = expNow(talkFace, baseExp(talkFace));
+  const sc = 4.8, cx = 266, by = 346;
+
+  ctx.save();
+  ctx.beginPath();
+  if(ctx.ellipse) ctx.ellipse(cx, by - 27, 37, 35, 0, 0, Math.PI*2);
+  else ctx.rect(cx-37, by-62, 74, 70);
+  ctx.fillStyle = 'rgba(12,19,34,0.55)'; ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(244,240,228,0.45)'; ctx.stroke();
+
+  ctx.translate(cx, by); ctx.scale(sc, sc);
+  V3.begin(0, 0);
+  V3.rotY(-0.30).rotX(0.04);
+  /* かた */
+  V3.box(b.sh*0.96, b.sd*0.96, b.sh*0.86, b.sd*0.9, -2.2, 0.2,
+         talkLook.cloth || '#5a8ac0', talkLook.cloth2 || '#3a5f8a');
+  V3.box(b.aw*0.72, b.aw*0.72, b.aw*0.70, b.aw*0.70, 0.0, 0.9, skin);
+  V3.move(0, 0.9 + hh, 0);
+  build3Head(hw, hh, hd, skin, s, talkLook, ex, !!typing, true);
+  V3.end();
+  ctx.restore();
+}
+
+/* =========================================================================
+   せりふから気もちを読む
+   ========================================================================= */
+const NAME2ID = {'ぼく':'me', 'おじいさん':'oldman', 'おばさん':'aunt'};
+function buildNameMap(){
+  for(const id in NPCS) NAME2ID[NPCS[id].name] = id;
+}
+const EMO_RULES = [
+  [/泣い|なみだ|涙|うるうる|ひっく/, 'cry'],
+  [/あはは|わはは|はは[。！]|ふふ|えへ|へへ|きゃは|にひ/, 'laugh'],
+  [/……ばか|はずかし|べつに。|なんでもない|しらない。|うるさいな/, 'shy'],
+  [/こら[。！]|うるさい[。！]|ふざけ|だまれ|なんだと|やめろ/, 'angry'],
+  [/ばか|もう[。！]|ずるい|けち|ひどい/, 'pout'],
+  [/うわ|わっ、|えっ|ええっ|あっ、|ひゃ|びっくり|まさか|そんな|！！/, 'surprise'],
+  [/ねむ|あくび|おやすみ|ふぁ/, 'sleepy'],
+  [/ごめん|さびし|かなし|つらい|ざんねん|だめだった|しかたな|しょんぼり|かわいそう/, 'sad'],
+  [/こわ|あぶな|しんぱい|どうしよう|まずい|やばい/, 'worry'],
+  [/うれし|たのし|やった|ありがと|よかった|すごい|いいね|たのしみ|きれい|うまい|おいし/, 'happy'],
+  [/つかれ|あつい|暑い|へとへと/, 'tired'],
+  [/どうだろ|うーん|えーと|さあ。|かもしれない|なんだろ|？/, 'think']
+];
+function emoOf(text){
+  if(!text) return '';
+  for(let i=0;i<EMO_RULES.length;i++) if(EMO_RULES[i][0].test(text)) return EMO_RULES[i][1];
+  if(/！/.test(text)) return 'grin';
+  if(/^……。?$/.test(text)) return 'think';
+  return '';
+}
+
+/* ---- ぼく（プレイヤー）の見た目 ---- */
+const ME_LOOK = {id:'me', name:'ぼく', hair:'#2e2118', cloth:'#f4f0e4', cloth2:'#c0b8a0',
+                 legs:'#4a6b9a', shoe:'#3d332a', stripe:true, skin:'#f2c894', hat:null, seed:0};
+function meLook(){
+  ME_LOOK.skin = playerSkin();
+  ME_LOOK.hat = (G && G.items && G.items.omen) || (G && G.flags && G.flags.hat) ? '#e8c46a' : null;
+  return ME_LOOK;
+}
+
+/* ---- ふだんの表情は、その日の天気や仲のよさでも少し変わる ---- */
+function baseExp(id){
+  const s = CH3[id];
+  let k = (s && s.idle) || 'neutral';
+  if(!G) return k;
+  const love = (G.npc && G.npc[id]) || 0;
+  if(love >= 4 && (k === 'neutral' || k === 'calm')) k = 'smile';
+  if(id === 'me'){
+    if(G.min >= 1260) k = 'sleepy';
+    else if(isWet()) k = 'worry';
+    else if(G.day >= 29) k = 'sad';
+  } else if(G.weather === 'storm') k = 'worry';
+  return k;
+}
+
+/* ---- 人物（ドット絵版。立体を切ったときに使う） ---- */
+function drawPersonPix(sx, sy, dir, walk, p){
   const ph = walk===true ? 1 : (walk===false || walk==null) ? 0 : (walk|0)&3;
   const skin = p.skin || C.skin, hair = p.hair || '#3a2a1a',
         cloth = p.cloth || '#5a8ac0', cloth2 = p.cloth2 || '#3a5f8a',
@@ -1663,8 +2816,18 @@ function drawPerson(sx, sy, dir, walk, p){
              px(sx+1, y+3, 15, 1, 'rgba(0,0,0,0.20)'); }
 }
 
-/* ---- 猫 ---- */
+/* ---- 立体とドット絵の切りかえ口 ---- */
+function drawPerson(sx, sy, dir, walk, p){
+  if(OPT3D) drawPerson3(sx, sy, dir, walk, p);
+  else drawPersonPix(sx, sy, dir, walk, p);
+}
 function drawCat(sx, sy, dir, walk){
+  if(OPT3D) drawCat3(sx, sy, dir, walk);
+  else drawCatPix(sx, sy, dir, walk);
+}
+
+/* ---- 猫（ドット絵版） ---- */
+function drawCatPix(sx, sy, dir, walk){
   const c = '#c8a06a', d = '#8a6a3a';
   px(sx+3, sy+15, 10, 1, '#00000030');
   px(sx+3, sy+8, 10, 6, c);
@@ -1684,14 +2847,23 @@ function drawMap(){
     for(let gx=0; gx<MW; gx++) drawTile(row[gx], gx, gy, A);
   }
   if(G.area==='inn') drawInnDecor();
-  if(G.area==='shrine') drawShrineDecor();
-  // 人物（Y順）
+  if(G.area==='shrine' && !OPT3D) drawShrineDecor();
+  // 人物と大きな作り物（Y順）
   const list = visibleNPCs().map(n=>({y:n.y, d:()=>drawNPC(n)}));
   list.push({y:G.y, d:drawPlayer});
+  if(G.area==='shrine' && OPT3D) list.push({y:19.4, d:drawTorii3});
   list.sort((a,b)=>a.y-b.y).forEach(o=>o.d());
   drawWeather();
   drawLight();
   drawAreaLabel();
+  if(mode==='scene' && OPT3D && OPTBUST) drawBust();
+}
+
+/* ---- 鳥居（立体） ---- */
+function drawTorii3(){
+  V3.begin(10*16, MAPY + 20*16);
+  buildTorii(7*16);
+  V3.end();
 }
 
 
@@ -1762,10 +2934,9 @@ function playerSkin(){
 }
 function drawPlayer(){
   const sx = G.x*TS, sy = MAPY + G.y*TS - 4;
-  drawPerson(sx, sy, G.dir, moveAnim ? walkPhase : 0, {
-    skin: playerSkin(), hair:'#2e2118', cloth:'#e8e0c8', cloth2:'#b0a68c',
-    legs:'#4a6b9a', stripe:true, hat: G.flags.hat ? '#e8c46a' : null
-  });
+  const p = meLook();
+  p.ph = 0; p.moving = false;
+  drawPerson(sx, sy, G.dir, moveAnim ? walkPhase : 0, p);
 }
 
 /* ---- NPC ---- */
@@ -1773,7 +2944,11 @@ function drawNPC(n){
   const sx = n.x*TS, sy = MAPY + n.y*TS - 4;
   if(n.id==='cat'){ drawCat(sx, sy, n.dir, (frameCount>>4)%2===0); return; }
   const idle = n.moves && ((frameCount>>4)%16)===0 ? 1 : 0;
-  drawPerson(sx, sy, n.dir, idle, n.look);
+  n.look.ph = undefined; n.look.moving = false;
+  /* すぐそばに立つと、こちらへ顔を向ける */
+  const dx = G.x - n.x, dz = G.y - n.y;
+  n.look.near = (Math.abs(dx) + Math.abs(dz) <= 1) ? Math.atan2(dx, dz) : null;
+  drawPerson(sx, sy, n.dir, OPT3D ? 0 : idle, n.look);
   if(n.mark){
     const b = Math.sin(frameCount*0.15)*1.5;
     px(sx+6, sy-8+b, 4, 5, C.gold); px(sx+6, sy-2+b, 4, 2, C.gold);
@@ -1866,6 +3041,7 @@ function setMode(m){
   elMenu.style.display   = (m==='menu') ? 'flex' : 'none';
   elHelp.style.display   = (m==='help') ? 'flex' : 'none';
   if(m!=='scene') elChoices.style.display='none';
+  if(m!=='scene'){ talkFace = ''; talkLook = null; }
   if(m==='field' && typeof refreshActD==='function'){ ctxLabel=''; refreshActD(); }
 }
 
@@ -1902,6 +3078,7 @@ function showLine(who, text){
   nm.textContent = narr ? '' : who;
   tx.className = narr ? 'n' : '';
   nx.textContent = '';
+  faceLine(narr ? '' : who, text);
   let n = 0;
   tx.textContent = '';
   const full = text;
@@ -1916,7 +3093,23 @@ function showLine(who, text){
   if(!narr) sfx('blip');
 }
 
+/* だれがしゃべっているのかと、そのときの気もちを顔にわたす。
+   せりふ本文からだいたいの気もちを読みとるので、
+   八千行ある会話をひとつも書きなおさずに表情がつく。 */
+function faceLine(who, text){
+  if(!who) return;                       // 地の文では顔を変えない
+  const id = NAME2ID[who];
+  if(!id){ talkFace = ''; talkLook = null; return; }
+  const e = emoOf(text);
+  if(e) setExp(id, e, 900); else clearExp(id);
+  if(id === 'cat'){ talkFace = ''; talkLook = null; return; }
+  talkFace = id;
+  talkLook = bustLook(id);
+  if(id !== 'me' && /？/.test(text)) setExp('me', 'think', 240);
+}
+
 function showChoice(item){
+  faceLine(item.who || '', item.choice || '');
   $('tname').textContent = item.who || '';
   $('ttext').textContent = item.choice;
   $('ttext').className = item.who ? '' : 'n';
@@ -6824,11 +8017,14 @@ function drawRadioScene(){
     const skin = isMe ? playerSkin() : (i%2?C.skin:C.skin2);
     ctx.save(); ctx.translate(bx, by); ctx.scale(2,2);
     drawPerson(0, 0, 0, false, { skin, hair:'#2e2118',
-      cloth: isMe?'#f4f0e4':pick0(i), cloth2:'#a8a08c', legs:'#4a6b9a', tall:i===3?2:0 });
-    if(arm===0){ px(1,2,3,10,skin); px(13,2,3,10,skin); }
-    else if(arm===1){ px(1,-8,3,12,skin); px(13,-8,3,12,skin); }
-    else if(arm===2){ px(-4,4,7,3,skin); px(13,4,7,3,skin); }
-    else { px(2,-4,3,10,skin); px(12,4,3,8,skin); }
+      cloth: isMe?'#f4f0e4':pick0(i), cloth2:'#a8a08c', legs:'#4a6b9a', tall:i===3?2:0,
+      id: isMe?'me':'', exp:'grin', armPose:arm });
+    if(!OPT3D){
+      if(arm===0){ px(1,2,3,10,skin); px(13,2,3,10,skin); }
+      else if(arm===1){ px(1,-8,3,12,skin); px(13,-8,3,12,skin); }
+      else if(arm===2){ px(-4,4,7,3,skin); px(13,4,7,3,skin); }
+      else { px(2,-4,3,10,skin); px(12,4,3,8,skin); }
+    }
     ctx.restore();
     px(bx+4, by+34, 24, 3, '#00000022');
   }
@@ -7274,6 +8470,38 @@ function metPeople(){
   const TT = G.talkTally || {};
   return PEOPLE.filter(p => TT[p.id] || (p.k && (G.story[p.k]||0) > 0));
 }
+/* 「会った人」に出す小さな顔。話した回数がふえると、うれしそうな顔になる。 */
+function whoFace(id){
+  const look = (NPCS[id] && NPCS[id].look) || null;
+  if(!look || id === 'cat') return null;
+  const cvs = document.createElement('canvas');
+  cvs.width = 76; cvs.height = 76;
+  /* canvas はまとめて position:absolute になっているので、ここで戻しておく */
+  cvs.style.cssText = 'position:relative;left:auto;top:auto;display:block;'+
+                      'width:38px;height:38px;flex:none;border-radius:4px;'+
+                      'background:#1a2440;image-rendering:auto';
+  let g = null;
+  try{ g = cvs.getContext('2d'); }catch(e){ return null; }
+  if(!g) return null;
+  const love = (G.npc && G.npc[id]) || 0;
+  const ex = love >= 4 ? 'happy' : love >= 2 ? 'smile' : (CH3[id] && CH3[id].idle) || 'neutral';
+  const old = ctx; ctx = g;
+  try{
+    const s = spec3(look), b = BUILD[s.build] || BUILD.kid;
+    g.translate(38, 62); g.scale(6.2, 6.2);
+    V3.begin(0, 0);
+    V3.rotY(-0.34).rotX(0.05);
+    V3.box(b.sh*0.9, b.sd*0.9, b.sh*0.8, b.sd*0.86, -1.6, 0.2,
+           look.cloth || '#5a8ac0', look.cloth2 || '#3a5f8a');
+    V3.box(b.aw*0.72, b.aw*0.72, b.aw*0.70, b.aw*0.70, 0.0, 0.8, look.skin || C.skin);
+    V3.move(0, 0.8 + b.hh, 0);
+    build3Head(b.hw, b.hh, b.hd, look.skin || C.skin, s, look, ex, false, true);
+    V3.end();
+  }catch(e){ V3.drop(); }
+  ctx = old;
+  return cvs;
+}
+
 function renderWhoTab(L){
   const TT = G.talkTally || {};
   const met = metPeople();
@@ -7286,9 +8514,15 @@ function renderWhoTab(L){
     const days = TT[p.id] || 0;
     const st = p.k ? (G.story[p.k]||0) : 0;
     if(!days && !st){ row('<span class="dim">？？？？？</span>'); return; }
-    const r = row('<b>'+nm+'</b>'+
-      '<br><span class="dim" style="font-size:11px">　'+p.where+'</span>');
-    r.style.padding='5px 0';
+    const r = row('');
+    r.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;'+
+                      'border-bottom:1px dotted #2c3c5e';
+    const face = OPT3D ? whoFace(p.id) : null;
+    if(face) r.appendChild(face);
+    const t = document.createElement('div');
+    t.innerHTML = '<b>'+nm+'</b>'+
+      '<br><span class="dim" style="font-size:11px">'+p.where+'</span>';
+    r.appendChild(t);
   });
 }
 
@@ -7406,6 +8640,18 @@ function renderMenu(){
     b.textContent = audioOn ? '音：オン' : '音：オフ';
     b.onclick=()=>{ toggleAudio(); renderMenu(); };
     L.appendChild(b);
+    const d=document.createElement('button');
+    d.className='tab'; d.style.width='100%'; d.style.marginTop='6px';
+    d.textContent = OPT3D ? '見た目：立体' : '見た目：ドット絵';
+    d.onclick=()=>{ G.opt.d3 = OPT3D ? 0 : 1; syncOpt(); save(); renderMenu(); };
+    L.appendChild(d);
+    if(OPT3D){
+      const f=document.createElement('button');
+      f.className='tab'; f.style.width='100%'; f.style.marginTop='6px';
+      f.textContent = OPTBUST ? '話し相手の顔：出す' : '話し相手の顔：出さない';
+      f.onclick=()=>{ G.opt.bust = OPTBUST ? 0 : 1; syncOpt(); save(); renderMenu(); };
+      L.appendChild(f);
+    }
     const h=document.createElement('button');
     h.className='tab'; h.style.width='100%'; h.style.marginTop='6px';
     h.textContent='あそびかた';
@@ -7581,6 +8827,10 @@ function openHelp(from){
     '<b>八時四十五分より前に寝る</b>と、翌朝はやく目がさめて、ラジオ体操に行けます。'+
     '<div class="sec">どうぐ</div>'+
     '右上のボタンから、ちず・虫図鑑・魚図鑑・ひろいもの・ひと・絵日記・記録が見られます。'+
+    '<div class="sec">見た目</div>'+
+    '人と草木は<b>立体</b>で描いています。話しかけると、右上にその人の顔が出て、'+
+    'せりふに合わせて<b>表情</b>が変わります。<br>'+
+    'ドット絵のほうがよければ、<b>記録</b>の画面のいちばん下で切りかえられます。'+
     '<div class="sec">町の人</div>'+
     '町にはたくさんの人がいます。同じ人と何度も話すと、'+
     '少しずつ打ちとけて、その人だけの<b>長い話</b>がはじまります。<br>'+
@@ -8321,10 +9571,11 @@ drawPlayer = function(){
   let x = G.x, y = G.y;
   if(moveAnim){ x = G.x + (moveAnim.fx-G.x)*moveAnim.t; y = G.y + (moveAnim.fy-G.y)*moveAnim.t; }
   const sx = Math.round(x*TS), sy = Math.round(MAPY + y*TS - 4);
-  drawPerson(sx, sy, G.dir, moveAnim ? walkPhase : 0, {
-    skin: playerSkin(), hair:'#2e2118', cloth:'#f4f0e4', cloth2:'#c0b8a0',
-    legs:'#4a6b9a', stripe:true, hat: G.items.omen ? '#e8c46a' : null
-  });
+  const p = meLook();
+  /* 立体のときは、コマ送りではなくなめらかに足を運ぶ */
+  p.ph = (((walkPhase - (moveAnim ? moveAnim.t : 0)) * 0.25) % 1 + 1) % 1;
+  p.moving = !!moveAnim;
+  drawPerson(sx, sy, G.dir, moveAnim ? walkPhase : 0, p);
 };
 
 /* ---- 時間で起きること ---- */
@@ -8383,6 +9634,15 @@ document.addEventListener('touchstart', ()=>{ if(AC && AC.state==='suspended') A
   scaleStage();
   G = loadSave() || newGame(1);
   migrate();
+  syncOpt();
+  /* NPCの色データに、だれのものかという名ふだを付けておく。
+     これで立体のモデルと表情を、その人のものに選び分けられる。 */
+  buildNameMap();
+  for(const id in NPCS){
+    NPCS[id].look.id = id;
+    NPCS[id].look.name = NPCS[id].name;
+    NPCS[id].look.seed = (id.charCodeAt(0) * 7 + id.length) % 17;
+  }
   updateBar();
   showTitle();
   loop();
