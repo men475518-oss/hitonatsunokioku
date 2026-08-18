@@ -466,27 +466,32 @@ function toast(msg, ms){
 }
 
 /* ---------------- 画面フェード ---------------- */
-/* 暗転しているあいだは 1 以上になる。
-   場所を移っている最中に夕食の時間が来ると、暗転が二重にかさなって
+/* 暗転がいつごろ終わるかを、時刻で持っておく。
+   場所を移している最中に夕食の時間が来ると、暗転が二重にかさなって
    どちらも中途はんぱに終わり、夕食に呼ばれないまま夜になってしまう。
-   それを防ぐために、暗転中は時間の割りこみを止める。 */
-let fading = 0;
-function fadeDone(){ fading = fading > 0 ? fading - 1 : 0; }
+   それを防ぐため、暗転中は時間の割りこみを見おくる。
+
+   ここを「いま何枚かさなっているか」の数で持つと、数えまちがいが
+   一度でも起きたとき（暗転のとちゅうでアプリを切りかえられて、
+   終わりを知らせるタイマーが動かなかったときなど）、そのあとずっと
+   夕食も就寝も来なくなってしまう。時刻で持てば、かならず解ける。 */
+let fadeUntil = 0;
+function fadeHold(ms){ const t = Date.now() + ms; if(t > fadeUntil) fadeUntil = t; }
+function fadeBusy(){ return Date.now() < fadeUntil; }
 
 function fade(out, cb){
-  fading++;
+  fadeHold(560);
   elFlash.style.opacity = out ? '1' : '0';
   setTimeout(()=>{
     /* 画面がまっくらな今のうちに、NPCの立ち位置を入れかえておく */
     if(out && G) { try{ restNPCs(); }catch(e){} }
-    fadeDone();
     if(cb) cb();
   }, 460);
 }
 function fadeThrough(mid, done){
-  fading++;
-  fade(true, ()=>{ mid&&mid();
-    setTimeout(()=>{ fade(false, ()=>{ fadeDone(); if(done) done(); }); }, 120); });
+  fadeHold(1240);
+  fade(true, ()=>{ mid&&mid(); fadeHold(700);
+    setTimeout(()=>{ fade(false, done); }, 120); });
 }
 /* =========================================================================
    マップデータ  20列 x 24行
@@ -8313,7 +8318,6 @@ function drawFireworks(){
 
 /* =========================  一日の流れ  ========================= */
 function dinnerTime(){
-  G.phase = 'night';
   moveAnim = null; path = null;          // 歩きかけを打ちきる
   const t = G.today;
   const menu = pick(['カレー','焼き魚','野菜いため','冷やっこ','そうめん']);
@@ -8327,6 +8331,10 @@ function dinnerTime(){
        [B, Object.keys(t.places).length ? MAPS[Object.keys(t.places)[0]].name+'。' : 'べつに。'],
        ['おばちゃん','そう。']];
   fadeThrough(()=>{
+    /* 「夜になった」印は、ここで――実際に食堂まで連れてこられた時点で立てる。
+       先に立ててしまうと、なにかに割りこまれて移動しそこねたとき、
+       夕食が済んだことにされて二度と来なくなる。 */
+    G.phase = 'night';
     G.area='inn'; G.x=10; G.y=5; G.min=1140; updateBar(); setAmbience();
   }, ()=>{
     runScene([['*','食堂。今日の夕飯は' + menu + 'だった。']].concat(react).concat([
@@ -8343,9 +8351,9 @@ function bedWarn(){
     ['*','（部屋にもどって、絵日記を書こう）']], ()=>setMode('field'));
 }
 function forceBed(){
-  G.flags.forced = true;
   moveAnim = null; path = null;
-  fadeThrough(()=>{ G.area='inn'; G.x=3; G.y=3; G.min=1290; updateBar(); setAmbience(); },
+  fadeThrough(()=>{ G.flags.forced = true;      // 部屋に着いてから印を立てる
+                    G.area='inn'; G.x=3; G.y=3; G.min=1290; updateBar(); setAmbience(); },
     ()=>runScene([['*','いつのまにか、まぶたが重くなっていた。'],
       ['*','気がつくと、部屋にもどっていた。'],
       ['おばちゃん','（廊下から）日記、書いてから寝るんだよー。'],
@@ -9681,7 +9689,7 @@ function loop(){
     if(path && !moveAnim) stepPath();
     if(frameCount % 8 === 0) refreshActD();
     timeChecks();
-  } else if(mode==='activity' && act && act.kind !== 'diary' && !fading && forcedDue()){
+  } else if(mode==='activity' && act && act.kind !== 'diary' && !fadeBusy() && forcedDue()){
     /* 「ずっと見ている」のように、遊んだままいくらでも時間を進められる
        ところがある。夕食や寝る時間が来たら、遊びのほうを切りあげる。
        絵日記だけは、寝る流れそのものなので割りこまない。 */
@@ -9724,7 +9732,7 @@ function forcedDue(){
 
 function timeChecks(){
   if(!G.started) return;
-  if(fading) return;              // 場所を移している最中は、次のコマまで待つ
+  if(fadeBusy()) return;          // 場所を移している最中は、次のコマまで待つ
   // 8月7日の夕立
   if(G.day===7 && G.min>=780 && !isWet() && !seen('squall') && !MAPS[G.area].indoor){
     mark('squall');
