@@ -421,12 +421,8 @@ function advance(mins){
   G.stamina = clamp(G.stamina - mins*0.02, 0, 100);
   const A = MAPS[G.area];
   if(A && !A.indoor && period()!=='night' && !isWet()) G.tan = clamp(G.tan + mins*0.005, 0, 100);
-  if(before < 1110 && G.min >= 1110) pendingDinner = true;
-  if(before < 1230 && G.min >= 1230 && G.phase==='night') pendingBedWarn = true;
   updateBar();
 }
-
-let pendingDinner = false, pendingBedWarn = false;
 
 /* ---------------- 天気 ---------------- */
 const WEATHER_NAME = {sunny:'晴れ', cloudy:'くもり', rain:'雨', storm:'台風'};
@@ -8297,7 +8293,6 @@ function drawFireworks(){
 
 /* =========================  一日の流れ  ========================= */
 function dinnerTime(){
-  pendingDinner = false;
   G.phase = 'night';
   const t = G.today;
   const menu = pick(['カレー','焼き魚','野菜いため','冷やっこ','そうめん']);
@@ -8322,7 +8317,6 @@ function dinnerTime(){
   });
 }
 function bedWarn(){
-  pendingBedWarn = false;
   runScene([['おばちゃん','（遠くから）そろそろ寝る時間だよー。'],
     [B,'はーい。'],
     ['*','（部屋にもどって、絵日記を書こう）']], ()=>setMode('field'));
@@ -9705,8 +9699,13 @@ function timeChecks(){
     G.flags.rainStopped = true; G.weather='cloudy'; setAmbience();
     toast('雨が上がった。');
   }
-  // 夕食
-  if(pendingDinner && G.day<=31){ dinnerTime(); return; }
+  /* 夕食。
+     以前は「時計が18時半をまたいだ瞬間」に目じるしを立てていたが、
+     その目じるしはセーブに残らない。そのため、夕方をすぎたところで
+     ゲームを閉じて開きなおすと、夕食が来ないまま夜にもならず、
+     寝る時間の呼び出しもかからずに、その日が終わらなくなっていた。
+     いまは時計と、まだ夜になっていないことだけを見る。 */
+  if(G.day<=31 && G.phase!=='night' && G.min>=1110){ dinnerTime(); return; }
   if(G.min>=1230 && G.phase==='night' && !G.flags.bedWarned){
     G.flags.bedWarned = true; bedWarn(); return;
   }
