@@ -2066,15 +2066,16 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
   const dark = f.eyeCol || '#2b2119';
   const brc  = f.browCol || look.hair || '#3a2a1a';
   const z  = hd + 0.05;
-  /* 目は画面で2pxぶんある。頭が小さくなっても、あいだが
-     つぶれてひと続きの帯にならないよう、間隔に下限をおく。 */
-  const ex = Math.max(hw * (f.ex || 0.41), 1.5);
-  const ey = hh * (f.ey === undefined ? -0.06 : f.ey);
-  const my = -hh * (f.my || 0.62);
-  const by = ey + hh*0.36;
+  /* 顔の段どりは、頭の大きさの割合ではなく「画面のピクセル」で組む。
+     頭は画面で6pxそこそこしかないので、割合で並べると目と口が
+     くっついて、ひとかたまりの黒に見えてしまう。
+     生えぎわのすぐ下にまゆ、その1px下に目、そのさらに2〜3px下に口。 */
+  const PY = 1/HK;                                 // 画面の1px = ローカルのこの高さ
+  const ex = Math.max(hw * (f.ex || 0.41), 1.5);   // 目の左右（最低でも1pxあける）
+  const ey = hh*0.56 - 3.0*PY;                     // 目の高さ：生えぎわから3px下
+  const my = ey - 2.6*PY;                          // 口：目から2〜3px下
+  const by = ey + 2.0*PY;                          // まゆ：目から2px上
   const R = (x, v, w, h, col, e)=>V3.rect(x, v, z, w, h, col, FBIAS + (e || 0));
-  /* 画面の1pxぶんが、頭のローカル座標でどれだけか */
-  const PY = 1/HK;
 
   /* 横を向いているときは、向こうがわの目とまゆは見えない。
      そうしないと、遠近でつぶれた目がふたつ重なってにじむ。 */
@@ -2110,7 +2111,7 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
   if(talking && ((frameCount >> 2) & 3) < 2)
     mk = (mk === 'smile' || mk === 'grin' || mk === 'smileS') ? 'openSmile' :
          (mk === 'line'  || mk === 'small') ? 'o' : mk;
-  const mx = hw*0.30;
+  const mx = Math.max(hw*0.30, 1.2);
   if(mk === 'o' || mk === 'openSmile')      R(0, my, 2, 2, '#59292a', 0.06);
   else if(mk === 'oBig' || mk === 'laugh' || mk === 'wail')
                                             R(0, my, 3, 2, '#59292a', 0.06);
@@ -2260,15 +2261,15 @@ function drawFace(hw, hh, hd, look, exName, talking, big){
    奥ゆき（hd,sd）は幅より浅い。このカメラでは奥ゆきがそのまま画面の高さに
    出るので、実物どおりの厚みにすると頭が箱に見えてしまう。 */
 const BUILD = {
-  chibi : {hh:1.97, hw:3.21, hd:1.57, neck:0.21, tor:2.57, sh:2.96, sd:1.80, leg:3.05, lw:1.00, foot:0.44, arm:2.59, aw:0.77},
-  kid   : {hh:1.97, hw:3.27, hd:1.59, neck:0.27, tor:3.48, sh:3.28, sd:1.95, leg:3.72, lw:1.04, foot:0.49, arm:3.48, aw:0.81},
-  kidbig: {hh:2.03, hw:3.31, hd:1.62, neck:0.31, tor:3.36, sh:3.66, sd:2.12, leg:4.15, lw:1.13, foot:0.52, arm:3.72, aw:0.88},
-  girl  : {hh:1.94, hw:3.18, hd:1.56, neck:0.27, tor:2.99, sh:3.03, sd:1.80, leg:3.67, lw:0.95, foot:0.47, arm:3.40, aw:0.75},
-  teen  : {hh:1.98, hw:3.20, hd:1.57, neck:0.38, tor:3.60, sh:3.37, sd:1.88, leg:4.64, lw:1.02, foot:0.50, arm:4.29, aw:0.79},
-  adult : {hh:2.03, hw:3.29, hd:1.61, neck:0.43, tor:3.91, sh:4.05, sd:2.25, leg:4.82, lw:1.17, foot:0.57, arm:4.70, aw:0.94},
-  stout : {hh:2.09, hw:3.38, hd:1.65, neck:0.33, tor:3.85, sh:4.42, sd:2.60, leg:4.33, lw:1.31, foot:0.59, arm:4.53, aw:1.03},
-  plump : {hh:2.03, hw:3.33, hd:1.63, neck:0.31, tor:3.66, sh:4.21, sd:2.53, leg:4.03, lw:1.25, foot:0.57, arm:4.29, aw:0.98},
-  old   : {hh:1.98, hw:3.21, hd:1.58, neck:0.33, tor:3.48, sh:3.60, sd:2.06, leg:4.21, lw:1.07, foot:0.54, arm:4.21, aw:0.85, hunch:0.22}
+  chibi : {hh:2.46, hw:3.21, hd:1.57, neck:0.21, tor:2.42, sh:2.96, sd:1.80, leg:2.87, lw:1.00, foot:0.44, arm:2.59, aw:0.77},
+  kid   : {hh:2.46, hw:3.27, hd:1.59, neck:0.27, tor:3.27, sh:3.28, sd:1.95, leg:3.50, lw:1.04, foot:0.49, arm:3.48, aw:0.81},
+  kidbig: {hh:2.54, hw:3.31, hd:1.62, neck:0.31, tor:3.16, sh:3.66, sd:2.12, leg:3.90, lw:1.13, foot:0.52, arm:3.72, aw:0.88},
+  girl  : {hh:2.42, hw:3.18, hd:1.56, neck:0.27, tor:2.81, sh:3.03, sd:1.80, leg:3.45, lw:0.95, foot:0.47, arm:3.40, aw:0.75},
+  teen  : {hh:2.48, hw:3.20, hd:1.57, neck:0.38, tor:3.38, sh:3.37, sd:1.88, leg:4.36, lw:1.02, foot:0.50, arm:4.29, aw:0.79},
+  adult : {hh:2.54, hw:3.29, hd:1.61, neck:0.43, tor:3.68, sh:4.05, sd:2.25, leg:4.53, lw:1.17, foot:0.57, arm:4.70, aw:0.94},
+  stout : {hh:2.61, hw:3.38, hd:1.65, neck:0.33, tor:3.62, sh:4.42, sd:2.60, leg:4.07, lw:1.31, foot:0.59, arm:4.53, aw:1.03},
+  plump : {hh:2.54, hw:3.33, hd:1.63, neck:0.31, tor:3.44, sh:4.21, sd:2.53, leg:3.79, lw:1.25, foot:0.57, arm:4.29, aw:0.98},
+  old   : {hh:2.48, hw:3.21, hd:1.58, neck:0.33, tor:3.27, sh:3.60, sd:2.06, leg:3.96, lw:1.07, foot:0.54, arm:4.21, aw:0.85, hunch:0.22}
 };
 
 /* ---- キャラごとのつくり ---------------------------------------------
@@ -2812,7 +2813,7 @@ function drawBust(){
   const hw = b.hw, hh = b.hh, hd = b.hd;
   const skin = talkLook.skin || C.skin, hair = talkLook.hair || '#3a2a1a';
   const ex = expNow(talkFace, baseExp(talkFace));
-  const sc = 5.8, cx = 266, by = 348;
+  const sc = 5.0, cx = 266, by = 350;
 
   ctx.save();
   ctx.beginPath();
@@ -8627,7 +8628,7 @@ function whoFace(id){
   const old = ctx; ctx = g;
   try{
     const s = spec3(look), b = BUILD[s.build] || BUILD.kid;
-    g.translate(38, 64); g.scale(5.0, 5.0);
+    g.translate(38, 66); g.scale(4.4, 4.4);
     V3.begin(0, 0);
     V3.rotY(-0.34).rotX(0.05);
     V3.box(b.sh*0.9, b.sd*0.9, b.sh*0.8, b.sd*0.86, -1.6, 0.2,
