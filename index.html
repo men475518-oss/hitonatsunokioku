@@ -347,7 +347,7 @@ function newGame(loop){
     diary:[], radioCard:[], letters:[], sleptEarly:false, wokeEarly:false, radioDone:false,
     lastAllowance:1, seenEvents:{}, phase:'day', visited:{}, talkTally:{},
     sumoWins:{}, lastLine:{},
-    opt:{d3:1, bust:1}              // 見た目の設定（立体／話し相手の顔）
+    opt:{d3:1, bust:1, bgm:1}       // 見た目と音の設定（立体／話し相手の顔／曲）
   };
 }
 function blankToday(){
@@ -387,7 +387,7 @@ function migrate(){
   if(!G.npc) G.npc = {};
   if(!G.letters) G.letters = [];
   if(!G.seenEvents) G.seenEvents = {};
-  if(!G.opt) G.opt = {d3:1, bust:1};
+  if(!G.opt) G.opt = {d3:1, bust:1, bgm:1};
   STORY_KEYS.forEach(k=>{ if(G.story[k]===undefined) G.story[k]=0; });
   NPC_KEYS.forEach(k=>{ if(G.npc[k]===undefined) G.npc[k]=0; });
   const t = G.today, blank = blankToday();
@@ -1633,7 +1633,9 @@ function syncOpt(){
   if(!G.opt) G.opt = {};
   if(G.opt.d3   === undefined) G.opt.d3 = 1;
   if(G.opt.bust === undefined) G.opt.bust = 1;
+  if(G.opt.bgm  === undefined) G.opt.bgm = 1;
   OPT3D = !!G.opt.d3; OPTBUST = !!G.opt.bust;
+  bgmOn = !!G.opt.bgm;
 }
 
 /* =========================================================================
@@ -3324,6 +3326,8 @@ function nightAllowed(area){
 
 function gotoArea(area, x, y, cost){
   moveAnim = null;
+  /* 家の出入りには引き戸の音。外どうしの行き来では鳴らさない */
+  if((MAPS[G.area]||{}).indoor || (MAPS[area]||{}).indoor) sfx('door');
   fadeThrough(()=>{
     G.area = area; G.x = x; G.y = y;
     spawnExit = exitAt(x, y) || null;
@@ -6912,6 +6916,7 @@ function swingNet(){
   sfx('swing');
 }
 function flyAway(){
+  sfx('miss');
   setTimeout(()=>{ endAct(()=>say(pick(['逃げられた。','あと少しだったのに。','……にげ足がはやい。']))); }, 700);
 }
 function bugCaught(b){
@@ -6920,7 +6925,8 @@ function bugCaught(b){
   if(G.today.bugs.indexOf(b.name)<0) G.today.bugs.push(b.name);
   const isNew = G.bugs[b.id]===1;
   if(isNew) note(b.name+'をつかまえた。');
-  sfx('get');
+  sfx('net');
+  setTimeout(()=>sfx('get'), 320);
   setTimeout(()=>{ endAct(()=>{
     runScene([['*', b.name+'をつかまえた！'],
       isNew ? ['*','虫図鑑に登録した。'] : null,
@@ -7817,7 +7823,7 @@ function diaryTick(){
     if(a.c % 3 === 0) sfx('write');
     diaryText();
   } else {
-    if(a.r < a.rows.length-1){ a.r++; a.c=0; a.wait=10; diaryText(); }
+    if(a.r < a.rows.length-1){ a.r++; a.c=0; a.wait=10; sfx('page'); diaryText(); }
     else { a.phase='pause';
       if(a.onDone){ a.onDone(); return; }
       if(a.chosen) finishDiary(a.lines, a.chosen); else diaryReady(); }
@@ -8773,6 +8779,11 @@ function renderMenu(){
     b.textContent = audioOn ? '音：オン' : '音：オフ';
     b.onclick=()=>{ toggleAudio(); renderMenu(); };
     L.appendChild(b);
+    const m=document.createElement('button');
+    m.className='tab'; m.style.width='100%'; m.style.marginTop='6px';
+    m.textContent = bgmOn ? '曲：ながす' : '曲：ながさない';
+    m.onclick=()=>{ G.opt.bgm = bgmOn ? 0 : 1; syncOpt(); save(); renderMenu(); };
+    L.appendChild(m);
     const d=document.createElement('button');
     d.className='tab'; d.style.width='100%'; d.style.marginTop='6px';
     d.textContent = OPT3D ? '見た目：立体' : '見た目：ドット絵';
@@ -8960,6 +8971,10 @@ function openHelp(from){
     '<b>八時四十五分より前に寝る</b>と、翌朝はやく目がさめて、ラジオ体操に行けます。'+
     '<div class="sec">どうぐ</div>'+
     '右上のボタンから、ちず・虫図鑑・魚図鑑・ひろいもの・ひと・絵日記・記録が見られます。'+
+    '<div class="sec">音</div>'+
+    'セミ、波、風、井戸の水音。朝は遠くからラジオ体操が聞こえます。'+
+    '時間帯と天気で、短い曲がときどき流れます。<br>'+
+    '音そのものと、曲だけを消すのは、<b>記録</b>の画面の下でべつべつに切りかえられます。'+
     '<div class="sec">見た目</div>'+
     '人と草木は<b>立体</b>で描いています。話しかけると、右上にその人の顔が出て、'+
     'せりふに合わせて<b>表情</b>が変わります。<br>'+
@@ -9223,6 +9238,7 @@ function startEnding(){
    音（Web Audio API：BGMより環境音）
    ========================================================================= */
 let AC = null, master = null, audioOn = true, layers = {}, noiseBuf = null, whiteBuf = null, evtTimer = null;
+let bgmOn = true;      // 曲だけを切ることもできる
 
 function initAudio(){
   if(AC) { if(AC.state==='suspended') AC.resume(); return; }
@@ -9248,7 +9264,7 @@ function initAudio(){
       if(k==='rain'){ f.type='lowpass'; f.frequency.value=3200; }
       if(k==='fan'){ f.type='lowpass'; f.frequency.value=420; }
       if(k==='cicada'){ f.type='bandpass'; f.frequency.value=3800; f.Q.value=1.1; }
-      if(k==='wind'){ f.type='lowpass'; f.frequency.value=180; }
+      if(k==='wind'){ f.type='lowpass'; f.frequency.value=680; }
       const mod = AC.createGain(); mod.gain.value = 1;
       src.connect(f); f.connect(mod); mod.connect(g); g.connect(master); src.start();
       layers[k] = {g, f, mod};
@@ -9261,9 +9277,17 @@ function initAudio(){
     const wl = AC.createOscillator(), wg = AC.createGain();
     wl.frequency.value = 0.11; wg.gain.value = 0.40;
     wl.connect(wg); wg.connect(layers.wave.mod.gain); wl.start();
+    // 風のうねり（ときどき、思い出したように強く吹く）
+    const fl = AC.createOscillator(), fg = AC.createGain();
+    fl.frequency.value = 0.055; fg.gain.value = 0.62;
+    fl.connect(fg); fg.connect(layers.wind.mod.gain); fl.start();
+    const fl2 = AC.createOscillator(), fg2 = AC.createGain();
+    fl2.frequency.value = 0.017; fg2.gain.value = 0.34;
+    fl2.connect(fg2); fg2.connect(layers.wind.mod.gain); fl2.start();
     setAmbience();
     if(evtTimer) clearInterval(evtTimer);
     evtTimer = setInterval(ambientEvent, 2600);
+    if(!bgmT) bgmLoop();
   }catch(e){ AC=null; }
 }
 function toggleAudio(){
@@ -9271,7 +9295,7 @@ function toggleAudio(){
   if(!audioOn) stopMusic(); else setAmbience();
   if(master) master.gain.setTargetAtTime(audioOn?0.5:0, AC.currentTime, 0.1);
 }
-const LAYER_MUL = {wave:1.8, river:1.6, rain:0.9, fan:0.7, cicada:1.5, wind:0};
+const LAYER_MUL = {wave:1.8, river:1.6, rain:0.9, fan:0.7, cicada:1.5, wind:1.15};
 let ambArea = '';
 function setLayer(k, v, fast){
   v = v * (LAYER_MUL[k]===undefined ? 1 : LAYER_MUL[k]);
@@ -9302,6 +9326,109 @@ function musicTick(){
   if(b) tone(b, 0.55, 'sine', 0.016);
   if(i % 8 === 4) noiseHit(0.05, 5200, 0.008);      // レコードのノイズ
   musStep++;
+}
+
+
+/* =========================================================================
+   その時間、その天気の、短い曲
+   ─ 主役はあくまでセミと波なので、音はうんと小さく、
+     ひと節鳴らしたら、しばらく黙る。ずっと流れつづけないようにしている。
+   ─ 節はぜんぶこのゲームのために書いたもの。
+   ========================================================================= */
+const BGM = {
+  /* 朝：明るく、まっすぐのぼっていく */
+  morning: {step:200, hold:0.62, wave:'triangle', vol:1.00, rest:22,
+    mel: [784,0,880,0, 1047,0,0,0, 988,0,880,0, 784,0,0,0,
+          698,0,784,0, 880,0,0,0, 784,0,659,0, 523,0,0,0],
+    bass:[262,0,0,0, 0,0,0,0, 196,0,0,0, 0,0,0,0,
+          175,0,0,0, 0,0,0,0, 196,0,0,0, 262,0,0,0]},
+  /* 昼：暑さでぼやける。ほとんど鳴らさない */
+  noon:    {step:260, hold:1.10, wave:'sine', vol:0.72, rest:44,
+    mel: [1047,0,0,0, 0,0,0,0, 988,0,0,0, 0,0,0,0,
+          880,0,0,0, 0,0,0,0, 784,0,0,0, 0,0,0,0],
+    bass:[262,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+          196,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0]},
+  /* 夕方：少しさびしく、下りていく */
+  evening: {step:270, hold:0.85, wave:'sine', vol:0.95, rest:26,
+    mel: [880,0,784,0, 659,0,0,0, 587,0,659,0, 523,0,0,0,
+          440,0,523,0, 587,0,0,0, 523,0,494,0, 440,0,0,0],
+    bass:[220,0,0,0, 0,0,0,0, 175,0,0,0, 0,0,0,0,
+          196,0,0,0, 0,0,0,0, 165,0,0,0, 220,0,0,0]},
+  /* 夜：ほとんど息だけ */
+  night:   {step:320, hold:1.30, wave:'sine', vol:0.68, rest:40,
+    mel: [523,0,0,0, 587,0,0,0, 0,0,0,0, 494,0,0,0,
+          0,0,0,0, 440,0,0,0, 0,0,0,0, 0,0,0,0],
+    bass:[131,0,0,0, 0,0,0,0, 147,0,0,0, 0,0,0,0,
+          110,0,0,0, 0,0,0,0, 131,0,0,0, 0,0,0,0]},
+  /* 雨：静かなピアノ。音が長く残る */
+  rain:    {step:290, hold:1.45, wave:'triangle', vol:0.90, rest:24,
+    mel: [659,0,0,0, 587,0,523,0, 0,0,0,0, 440,0,0,0,
+          494,0,0,0, 440,0,392,0, 0,0,0,0, 349,0,0,0],
+    bass:[220,0,0,0, 0,0,0,0, 165,0,0,0, 0,0,0,0,
+          196,0,0,0, 0,0,0,0, 147,0,0,0, 0,0,0,0],
+    chord:[[220,262,330],[165,220,262],[196,247,294],[147,196,247]]}
+};
+
+let bgmT = null, bgmStep = 0, bgmKind = '', bgmRest = 0;
+
+/* 曲の一音。爪びきのように、はじいて、ゆっくり消える */
+function bgmNote(hz, dur, vol, type){
+  if(!AC || !audioOn) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(); o.type = type || 'triangle'; o.frequency.value = hz;
+  const f = AC.createBiquadFilter(); f.type = 'lowpass';
+  f.frequency.setValueAtTime(2800, t);
+  f.frequency.exponentialRampToValueAtTime(900, t + dur);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.025);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(f); f.connect(g); g.connect(master);
+  o.start(t); o.stop(t + dur + 0.06);
+}
+
+function bgmMood(){
+  if(!G || !G.started) return '';
+  if(G.weather === 'storm') return '';                 // 台風の日は、雨と風だけ
+  if(isWet()) return 'rain';
+  const p = period();
+  return p==='morning' ? 'morning' : p==='noon' ? 'noon' :
+         p==='evening' ? 'evening' : 'night';
+}
+function bgmAllowed(){
+  if(!AC || !audioOn || !bgmOn) return false;
+  if(mode === 'title' || mode === 'ending') return false;
+  if(mode === 'activity' && act && (act.kind === 'radio' || act.kind === 'diary')) return false;
+  if(musTimer) return false;                            // レコードのかかっている家
+  if((ambOf()||{}).music) return false;
+  return true;
+}
+function bgmLoop(){
+  bgmT = null;
+  let wait = 500;
+  try{
+    if(bgmAllowed()){
+      const k = bgmMood();
+      if(k){
+        const M = BGM[k];
+        if(k !== bgmKind){ bgmKind = k; bgmStep = 0; bgmRest = 0; }
+        wait = M.step;
+        if(bgmRest > 0){ bgmRest--; }
+        else {
+          const i = bgmStep % M.mel.length;
+          const n = M.mel[i], b = M.bass[i], v = M.vol;
+          if(n){ bgmNote(n, M.hold, 0.017*v, M.wave);
+                 bgmNote(n*2, M.hold*0.45, 0.0035*v, 'sine'); }
+          if(b) bgmNote(b, M.hold*2.0, 0.013*v, 'sine');
+          if(M.chord && i % 8 === 0)
+            M.chord[((i/8)|0) % M.chord.length].forEach(h=>bgmNote(h, M.hold*1.6, 0.005*v, 'sine'));
+          bgmStep++;
+          if(bgmStep % M.mel.length === 0) bgmRest = M.rest;   // ひと節おわり。しばらく黙る
+        }
+      } else { bgmKind = ''; }
+    } else { bgmKind = ''; }
+  }catch(e){}
+  bgmT = setTimeout(bgmLoop, wait);
 }
 
 const AMB = {
@@ -9343,7 +9470,13 @@ function setAmbience(){
     G.area==='taki' ? 900 : 1400, AC.currentTime, 0.4);
   setLayer('rain',  isWet() ? (storm?0.16:0.09) * (inside?0.45:1) : 0, jump);
   setLayer('fan',   (a.fan||0), jump);
-  setLayer('wind', 0, jump);                        // 風の音はなし
+  /* 風。外にいるときだけ。夜と雨の日は強め、台風の日はもっと強い。
+     窓のうちがわでは、ずいぶん遠くなる。 */
+  let wnd = (a.wind || 0) * (inside ? 0.30 : 1);
+  if(storm)      wnd = Math.max(wnd, inside ? 0.055 : 0.150);
+  else if(isWet()) wnd *= 1.25;
+  if(night)      wnd *= 1.20;
+  setLayer('wind', wnd, jump);
   let cic = a.cicada || 0;
   if(night || isWet()) cic = 0;
   else if(p==='evening') cic *= 0.6;
@@ -9379,7 +9512,77 @@ function ambientEvent(){
   if(a.creak && chance(0.25)) creak();
   if(a.drip && chance(a.echo?0.7:0.4)) drip(a.echo);
   if(p==='night' && !A.indoor && chance(0.6)) nightBug();
+  /* セミの一匹鳴き。地鳴りのような合唱の上に、近くの一匹が乗る */
+  if(a.cicada && !isWet() && p!=='night' && chance(A.indoor ? 0.10 : 0.34)) cicadaCall();
+  /* 波が砕ける音。海のそばだけ */
+  if(!A.indoor && (a.wave||0) >= 0.05 && chance(G.weather==='storm' ? 0.75 : 0.42)) waveBreak();
+  /* 朝のラジオ体操。外にいて、その時間のあいだだけ */
+  if(!A.indoor && p==='morning' && G.min >= 330 && G.min <= 445 &&
+     G.weather!=='storm' && chance(G.area==='vacant' ? 0.55 : 0.28)) taisoBleed();
 }
+/* ---- セミの、一匹ぶんの声 ----
+   夏のすすみ具合と時間帯で、鳴いている種類が変わる。
+   ひぐらしは朝はやくと夕方、つくつくぼうしは八月の後半から。 */
+function cicadaCall(){
+  const here = G.area, p = period();
+  const at = (ms, f)=>setTimeout(()=>{ if(G.area===here && AC && audioOn) f(); }, ms);
+  let k = 'minmin';
+  if(p==='evening' || (p==='morning' && G.min < 420)) k = chance(0.72) ? 'higurashi' : 'minmin';
+  else if(G.day >= 18 && chance(0.45)) k = 'tsukutsuku';
+  if(k === 'higurashi'){                       // カナカナカナカナ……
+    for(let i=0;i<14;i++) at(i*98, ()=>{
+      const f = 3250 - i*52, v = 0.019 * (1 - i*0.045);
+      tone(f, 0.05, 'triangle', v);
+      tone(f*1.5, 0.04, 'sine', v*0.4);
+    });
+  } else if(k === 'tsukutsuku'){                // オーシー ツクツク ツクツク……
+    at(0, ()=>tone(2050, 0.34, 'triangle', 0.015, 2550));
+    for(let i=0;i<7;i++) at(400 + i*168, ()=>{
+      tone(2900, 0.05, 'square', 0.011);
+      setTimeout(()=>tone(2350, 0.08, 'triangle', 0.011), 66);
+    });
+    at(1620, ()=>noiseHit(0.45, 3600, 0.016));
+  } else {                                      // ミーン ミンミンミン ミー
+    at(0, ()=>tone(2700, 0.46, 'triangle', 0.015, 2480));
+    for(let i=0;i<7;i++) at(500 + i*144, ()=>tone(2640, 0.09, 'triangle', 0.016));
+    at(1560, ()=>tone(2480, 0.42, 'triangle', 0.012, 2080));
+  }
+}
+
+/* ---- 打ちよせて、砕けて、引いていく波 ---- */
+function waveBreak(){
+  if(!AC || !audioOn || !whiteBuf) return;
+  const t = AC.currentTime;
+  const s = AC.createBufferSource(); s.buffer = whiteBuf; s.loop = true;
+  const f = AC.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 0.5;
+  f.frequency.setValueAtTime(1600, t);
+  f.frequency.exponentialRampToValueAtTime(380, t + 2.4);      // 砕けたあと、引く
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.050, t + 0.55);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 2.8);
+  s.connect(f); f.connect(g); g.connect(master);
+  s.start(t); s.stop(t + 3.0);
+}
+
+/* ---- 遠くのラジオ体操（朝だけ） ----
+   空き地のスピーカーから、風にのって切れぎれに届く。
+   節はこのゲームのために作ったもので、実在の曲ではない。 */
+const TAISO_MEL = [523,659,784,659, 523,587,659,0, 587,698,880,698, 587,523,0,0];
+function taisoBleed(){
+  if(!AC || !audioOn) return;
+  const d = G.area==='vacant' ? 0.30 : (G.area==='town' || G.area==='yard') ? 0.76 : 0.90;
+  const bus = muffle(d, 1);
+  if(!bus) return;
+  const i0 = chance(0.5) ? 0 : 8;                    // 途中から聞こえはじめる
+  jingle(bus, 0, TAISO_MEL.slice(i0), 0.060);
+  if(chance(0.55)){                                   // 号令（いち、に、さん、し）
+    const b2 = muffle(Math.min(0.95, d + 0.06), 1);
+    for(let i=0;i<4;i++)
+      syllable(b2, 148 + (i===3 ? 20 : 0), 1.0 + i*0.42, 0.17, 0.055, true);
+  }
+}
+
 function gullCall(){
   const here = G.area, n = 2 + ri(2);
   for(let i=0;i<n;i++) setTimeout(()=>{
@@ -9660,14 +9863,57 @@ function noiseHit(dur, freq, vol){
   const g = AC.createGain(); g.gain.value=vol; g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime+dur);
   s.connect(f); f.connect(g); g.connect(master); s.start(); s.stop(AC.currentTime+dur+0.02);
 }
+/* いま足の下にあるものは何か。足音を変えるのに使う */
+function groundUnderfoot(){
+  if(!G || !MAPS[G.area]) return 'dirt';
+  let t = '';
+  try{ t = tileAt(G.area, G.x, G.y); }catch(e){ t = ''; }
+  if(t === ',') return 'sand';
+  if(t === 'k' || t === 't' || t === 'P' || t === 'v') return 'wood';
+  if(t === 'S' || t === 'c') return 'stone';
+  if(t === 'w' || t === '~' || t === 'r') return 'water';
+  if(t === '.' || t === 'g') return 'grass';
+  const A = MAPS[G.area];
+  return A.ground === 'sand' ? 'sand' : A.ground === 'wood' ? 'wood' :
+         A.ground === 'stone' ? 'stone' : A.ground === 'dirt' ? 'dirt' : 'grass';
+}
+
 function sfx(k){
   if(!AC||!audioOn) return;
   if(k==='blip') tone(880,0.05,'square',0.02);
   else if(k==='ok') tone(1180,0.07,'square',0.03);
-  else if(k==='step') noiseHit(0.05, 700, 0.05);
+  else if(k==='step'){
+    /* 足音は、ふんでいるもので変わる。
+       砂はさらさら、板の間はことん、石はこつん、水はぱしゃ。 */
+    const g = groundUnderfoot();
+    if(g==='sand')       noiseHit(0.085, 1700, 0.030);
+    else if(g==='wood'){ noiseHit(0.045, 520, 0.042); tone(168, 0.06, 'sine', 0.022); }
+    else if(g==='stone') noiseHit(0.032, 1250, 0.046);
+    else if(g==='water'){ noiseHit(0.13, 1900, 0.050); tone(420, 0.08, 'sine', 0.016, 900); }
+    else if(g==='grass') noiseHit(0.065, 2500, 0.026);
+    else                 noiseHit(0.05, 700, 0.045);
+  }
   else if(k==='get'){ tone(880,0.09,'square',0.04); setTimeout(()=>tone(1320,0.14,'square',0.04),90); }
   else if(k==='pon'){ noiseHit(0.12, 320, 0.22); tone(180,0.10,'square',0.05); }
-  else if(k==='write') noiseHit(0.05, 2600, 0.030);
+  else if(k==='write'){
+    /* 紙の上をすべるペン先。一画ごとにかすれ方が少しちがう */
+    noiseHit(0.030 + rnd(0.030), 2000 + rnd(1600), 0.017 + rnd(0.012));
+  }
+  else if(k==='page'){                                    // 紙をめくる・ずらす
+    noiseHit(0.22, 1400, 0.030);
+    setTimeout(()=>noiseHit(0.10, 2400, 0.016), 110);
+  }
+  else if(k==='net'){                                     // 虫あみがかぶさる
+    noiseHit(0.13, 1500, 0.085);
+    setTimeout(()=>noiseHit(0.09, 820, 0.050), 70);       // 網が地面をこする
+    setTimeout(()=>{ for(let i=0;i<5;i++)                 // 中であばれる羽音
+      setTimeout(()=>tone(2900+rnd(600), 0.035, 'square', 0.009), i*52); }, 150);
+  }
+  else if(k==='miss') noiseHit(0.17, 2100, 0.065);        // 空ぶり
+  else if(k==='door'){                                    // 引き戸
+    noiseHit(0.34, 640, 0.048);
+    setTimeout(()=>{ noiseHit(0.09, 400, 0.045); tone(120, 0.08, 'sine', 0.020); }, 320);
+  }
   else if(k==='organ'){ tone(146,1.8,'sine',0.07); tone(220,1.6,'triangle',0.04); tone(293,1.2,'sine',0.03); }
   else if(k==='clash'){ noiseHit(0.22, 420, 0.20); tone(120,0.18,'square',0.05); }
   else if(k==='swing') noiseHit(0.18, 1800, 0.10);
