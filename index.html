@@ -2064,83 +2064,106 @@ function expNow(id, base){
 function drawFaceSmall(hw, hh, hd, look, S, talking){
   const f = look.f || {};
   const dark = f.eyeCol || '#2b2119';
-  const brc  = f.browCol || look.hair || '#3a2a1a';
-  const z  = hd + 0.05;
-  /* 顔の段どりは、頭の大きさの割合ではなく「画面のピクセル」で組む。
-     頭は画面で6pxそこそこしかないので、割合で並べると目と口が
-     くっついて、ひとかたまりの黒に見えてしまう。
-     生えぎわのすぐ下にまゆ、その1px下に目、そのさらに2〜3px下に口。 */
-  const PY = 1/HK;                                 // 画面の1px = ローカルのこの高さ
-  const ex = Math.max(hw * (f.ex || 0.41), 1.5);   // 目の左右（最低でも1pxあける）
-  const ey = hh*0.56 - 3.0*PY;                     // 目の高さ：生えぎわから3px下
-  const my = ey - 2.6*PY;                          // 口：目から2〜3px下
-  const by = ey + 2.0*PY;                          // まゆ：目から2px上
-  const R = (x, v, w, h, col, e)=>V3.rect(x, v, z, w, h, col, FBIAS + (e || 0));
+  const lip  = f.lipCol || '#8f4a3e';              // 口は目と色を変える。ならんでも溶けない
+  const PY = 1/HK;
+  /* 顔のパーツは、頭の前面に貼った平らな板ではなく、
+     頭のまるみに沿わせて置く。平らなままだと、横を向いたとき
+     目が顔の前ふちまですべっていって、はみ出して見える。
+     まん中（鼻・口）がいちばん手前、外へ行くほど奥へまわりこむ。 */
+  const zAt = x => {
+    const t = Math.min(1, Math.abs(x) / (hw*1.05));
+    return hd * 0.85 * Math.sqrt(Math.max(0.15, 1 - t*t)) + 0.05;
+  };
+  /* 顔の段どりは「画面のピクセル」で組む。頭は画面で6pxそこそこしかないので、
+     頭の大きさの割合で並べると、目と口がくっついたり、口があごからはみ出したりする。
+     V() は「頭の中心から画面で何px下か」を、頭の中の高さに直すもの。 */
+  const V  = sy => -sy * PY;
+  const top = -hh*0.56*HK;                         // 生えぎわ（画面）
+  const bot =  hh*HK;                              // あご（画面）
+  const eyeY = top + 1.45;                         // 目：生えぎわの1.5px下
+  const mouY = bot - 1.15;                         // 口：あごの1px上
 
-  /* 横を向いているときは、向こうがわの目とまゆは見えない。
-     そうしないと、遠近でつぶれた目がふたつ重なってにじむ。 */
-  const turn = V3.turn();
-  const hide = Math.abs(turn) > 0.55 ? (turn > 0 ? 1 : -1) : 0;
+  /* 横を向くと、両目のあいだが遠近でつまる。つまったぶんだけ左右にひらいて、
+     画面の上での間隔を保つ。こうしないと目がふたつくっついて一本の線になる。 */
+  const turn = V3.turn();                          // 頭のひねり（-1〜1）
+  const cosT = Math.sqrt(Math.max(0.25, 1 - turn*turn));
+  const ex0  = Math.max(hw * (f.ex || 0.41), 1.5);
+  const ex   = Math.min(ex0 / cosT, hw * 0.60);
+  /* ほとんど真横になったときだけ、向こうがわの目を隠す。
+     そのときは残った目を顔の前がわへ寄せる（後頭部よりに残らないように）。 */
+  const hide = Math.abs(turn) > 0.78 ? (turn > 0 ? 1 : -1) : 0;
+  const shift = hide ? hide*ex*0.55 : 0;
+
+  const R = (x, sy, w, h, col, e)=>V3.rect(x, V(sy), zAt(x), w, h, col, FBIAS + (e || 0));
 
   /* ---- 目 ----
-     目の小さい人（おとな・お年より）は一段うすくする。
-     まるい2x2のままだと、うす色の肌にくぼみのように見えてしまう。 */
-  const thin = (f.eh || 0.21) < 0.19 ? 1 : 0;
+     この大きさではまゆを描く場所がないので、まゆの気もちは目の形で見せる。
+     つり目は外がわを上げ、たれ目は外がわを下げる。もとのドット絵も、
+     顔は「目ふたつと口」だけで足りていた。 */
+  const thin = (f.eh || 0.21) < 0.19 ? 1 : 0;      // おとな・お年よりは目がうすい
+  const bk = S.brow || 'flat';
+  const slant = bk === 'angry' ? 1 : bk === 'sad' ? -1 : 0;
+  const lift  = (bk === 'up' || bk === 'high') ? 0.6 : 0;
   const eyeH = k => Math.max(1, ((k === 'wide') ? 3 : (k === 'open' || k === 'soft') ? 2 : 1) - thin);
   const drawEye = (side, k)=>{
     if(side === hide) return;
-    R(side*ex, ey, 2, eyeH(k), dark, 0.1);
+    const x = side*ex + shift, y = eyeY - lift;
+    const h = eyeH(k);
+    if(slant && h <= 2 && k !== 'shut' && k !== 'arc'){
+      /* 外がわと内がわの点を、半pxずつ上下にずらして傾きを出す */
+      const outer = side*(ex + 0.5) + shift, inner = side*(ex - 0.5) + shift;
+      R(outer, y - 0.5*slant, 1, h, dark, 0.1);
+      R(inner, y + 0.5*slant, 1, h, dark, 0.1);
+    } else {
+      R(x, y, 2, h, dark, 0.1);
+    }
   };
   drawEye(-1, S.eyeL || S.eye || 'open');
   drawEye( 1, S.eyeR || S.eye || 'open');
-
-  /* ---- まゆ（内がわの1pxを上下させて、八の字とつり眉を出す） ---- */
-  const bk = S.brow || 'flat';
-  if(bk !== 'flat' || !f.noBrow){
-    const lift = (bk === 'up' || bk === 'high') ? PY : 0;
-    const tilt = bk === 'sad' ? PY : bk === 'angry' ? -PY : 0;
-    for(const side of [-1, 1]){
-      if(side === hide) continue;
-      R(side*(ex + 0.55), by + lift, 1, 1, brc, 0.06);              // 外がわ
-      R(side*(ex - 0.55), by + lift + tilt, 1, 1, brc, 0.06);       // 内がわ
-    }
-  }
 
   /* ---- 口 ---- */
   let mk = S.mouth || 'line';
   if(talking && ((frameCount >> 2) & 3) < 2)
     mk = (mk === 'smile' || mk === 'grin' || mk === 'smileS') ? 'openSmile' :
          (mk === 'line'  || mk === 'small') ? 'o' : mk;
-  const mx = Math.max(hw*0.30, 1.2);
-  if(mk === 'o' || mk === 'openSmile')      R(0, my, 2, 2, '#59292a', 0.06);
+  const mx = Math.max(hw*0.30, 1.1);
+  const M = (dx, dy, w, h, col)=>R(dx + shift, mouY + dy, w, h, col, 0.06);
+  if(mk === 'o' || mk === 'openSmile')          M(0, 0, 2, 2, '#59292a');
   else if(mk === 'oBig' || mk === 'laugh' || mk === 'wail')
-                                            R(0, my, 3, 2, '#59292a', 0.06);
+                                                M(0, 0, 3, 2, '#59292a');
   else if(mk === 'smile' || mk === 'grin' || mk === 'smileS' || mk === 'smirk'){
-    R(-mx, my + PY, 1, 1, dark, 0.06); R(0, my, 1, 1, dark, 0.06);
-    R( mx, my + PY, 1, 1, dark, 0.06);
+    M(-mx, -0.5, 1, 1, lip); M(0, 0.5, 1, 1, lip); M(mx, -0.5, 1, 1, lip);
   } else if(mk === 'frown' || mk === 'frown2' || mk === 'pout'){
-    R(-mx, my, 1, 1, dark, 0.06); R(0, my + PY, 1, 1, dark, 0.06);
-    R( mx, my, 1, 1, dark, 0.06);
+    M(-mx, 0.5, 1, 1, lip); M(0, -0.5, 1, 1, lip); M(mx, 0.5, 1, 1, lip);
   } else if(mk === 'wavy'){
-    R(-mx, my, 1, 1, dark, 0.06); R(0, my + PY, 1, 1, dark, 0.06);
-  } else                                    R(0, my, 2, 1, dark, 0.06);
+    M(-mx, 0, 1, 1, lip); M(mx*0.4, 0.7, 1, 1, lip);
+  } else if(mk === 'small')                     M(0, 0, 1, 1, lip);
+  else                                          M(0, 0, 3, 1, lip);
 
   /* ---- ほお・あせ・なみだ・怒りマーク ---- */
-  if(S.blush){
-    for(const side of [-1, 1]) R(side*hw*0.66, -hh*0.18, 2, 1, '#e07a6c', 0.02);
-  }
-  if(S.sweat) R(hw*0.80, hh*0.22 - ((frameCount % 96)/96)*hh*0.4, 1, 2, '#94d4f0', 0.2);
+  if(S.blush)
+    for(const side of [-1, 1]){
+      if(side === hide) continue;
+      R(side*(ex + 1.4) + shift, eyeY + 1.2, 2, 1, '#e07a6c', 0.02);
+    }
+  if(S.sweat) R(ex + 1.6 + shift, top + 0.6 - ((frameCount % 96)/96)*2.5, 1, 2, '#94d4f0', 0.2);
   if(S.tear){
     const t = (frameCount % 64)/64;
-    for(const side of [-1, 1]) R(side*ex, ey - hh*0.30 - t*hh*0.5, 1, 2, '#94d4f0', 0.2);
+    for(const side of [-1, 1]){
+      if(side === hide) continue;
+      R(side*ex + shift, eyeY + 1.4 + t*2.2, 1, 2, '#94d4f0', 0.2);
+    }
   }
   if(S.mad){
-    R(hw*0.62, hh*0.46, 3, 1, '#d2483c', 0.2);
-    R(hw*0.62, hh*0.46, 1, 3, '#d2483c', 0.2);
+    R(ex + 1.5 + shift, top + 0.4, 3, 1, '#d2483c', 0.2);
+    R(ex + 1.5 + shift, top + 0.4, 1, 3, '#d2483c', 0.2);
   }
   if(look.glasses){
-    for(const side of [-1, 1]) R(side*ex, ey, 3, 1, '#3b3b40', 0.24);
-    R(0, ey, 1, 1, '#3b3b40', 0.24);
+    for(const side of [-1, 1]){
+      if(side === hide) continue;
+      R(side*ex + shift, eyeY, 3, 1, '#3b3b40', 0.24);
+    }
+    if(!hide) R(shift, eyeY, 1, 1, '#3b3b40', 0.24);
   }
 }
 
@@ -9401,6 +9424,7 @@ function bgmAllowed(){
   if(mode === 'title' || mode === 'ending') return false;
   if(mode === 'activity' && act && (act.kind === 'radio' || act.kind === 'diary')) return false;
   if(musTimer) return false;                            // レコードのかかっている家
+  if(balTimer) return false;                            // 帰り道のバラード
   if((ambOf()||{}).music) return false;
   return true;
 }
@@ -9487,7 +9511,7 @@ function setAmbience(){
   if(a.music && audioOn) startMusic(); else stopMusic();
 }
 function ambientEvent(){
-  if(!AC || !audioOn || mode==='title') return;
+  if(!AC || !audioOn || mode==='title' || mode==='ending') return;
   const A = MAPS[G.area]||{}, p = period(), a = ambOf();
   if(a.chime && !isWet() && chance(0.35)) bell(1700+rnd(300), 0.9);
   if(a.clock && chance(0.45)) clockTick();
@@ -9936,10 +9960,9 @@ function loop(){
     if(path && !moveAnim) stepPath();
     if(frameCount % 8 === 0) refreshActD();
     timeChecks();
-  } else if(mode==='activity' && act && act.kind !== 'diary' && !fadeBusy() && forcedDue()){
+  } else if(mode==='activity' && act && !NOCUT[act.kind] && !fadeBusy() && forcedDue()){
     /* 「ずっと見ている」のように、遊んだままいくらでも時間を進められる
-       ところがある。夕食や寝る時間が来たら、遊びのほうを切りあげる。
-       絵日記だけは、寝る流れそのものなので割りこまない。 */
+       ところがある。夕食や寝る時間が来たら、遊びのほうを切りあげる。 */
     endAct();
   }
   // 描画
@@ -9965,6 +9988,11 @@ drawPlayer = function(){
 
 /* ---- 時間で起きること ---- */
 let squallDone = false;
+/* 筋書きの決まっている場面には、夕食や就寝で割りこまない。
+   とくに帰りのバスは最後の場面そのもので、ここを切ってしまうと
+   曲もろとも飛ばされて、いきなり終わりの画面になってしまう。 */
+const NOCUT = {diary:1, radio:1, card:1, sunset:1, fire:1, bath:1, sumo:1, bus:1};
+
 /* いま、その場から連れていかれる用事があるか（夕食・就寝） */
 function forcedDue(){
   if(!G || !G.started) return false;
