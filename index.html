@@ -2912,8 +2912,34 @@ function houseStyle(A){
   return 'house';
 }
 
+/* ---- まどの並び。絵をつくるときと、夜の明かりをのせるときで同じ計算をつかう ----
+   返すのは [まん中のx, まん中の高さ, 幅, 高さ]（どれも建物のなかの座標） */
+function houseWindows(W, Hpx, st, grow, doorsX){
+  const hw = W/2;
+  const wh = Hpx * (st.w + grow) / HK;
+  const bh = Math.max(1.8, Hpx*0.035);
+  const skirt = Math.min(bh + Hpx*0.13, bh + wh*0.42);
+  const rows = wh > 26 ? 2 : 1;
+  const step = W / Math.max(1, Math.round(W/21));
+  const dw = Math.min(11, Math.max(6.5, W*0.055));
+  const dTop = Math.min(wh - 2.6, skirt + Hpx*0.20);
+  const out = [];
+  for(let r=0; r<rows; r++){
+    const band = (wh - skirt - 1.4) / rows;
+    const y0 = skirt + 1.2 + r*band, y1 = y0 + band - 2.4;
+    if(y1 - y0 < 3.2) continue;
+    for(let x = -hw + step*0.5; x < hw - 2; x += step){
+      let near = false;
+      for(let i=0;i<doorsX.length;i++) if(Math.abs(x - doorsX[i]) < dw + step*0.45) near = true;
+      if(near && y0 < dTop + 1.8) continue;
+      out.push([x, (y0+y1)/2, Math.min(step*0.32, 7.5)*2, y1 - y0]);
+    }
+  }
+  return out;
+}
+
 /* ---- 一けんぶんの立体 ---- */
-function buildHouse(W, Hpx, grow, st, doorsX){
+function buildHouse(W, Hpx, grow, st, doorsX, lit){
   const hw = W/2;
   const D    = Hpx * st.d;                       // おくゆき
   const wh   = Hpx * (st.w + grow) / HK;         // かべの高さ
@@ -2923,6 +2949,8 @@ function buildHouse(W, Hpx, grow, st, doorsX){
   const bh = Math.max(1.8, Hpx*0.035);           // 土台の高さ
   const fz = hd + 0.6;                           // かべのすぐ手前
   const shrine = (st === HSTYLE.yashiro);
+  const pane = lit ? '#ffd894' : st.pane;        // 夜は障子に明かりがともる
+  const pane2 = lit ? '#f7c878' : '#e2d9c1';
 
   V3.move(0, 0, -hd);
 
@@ -2982,31 +3010,21 @@ function buildHouse(W, Hpx, grow, st, doorsX){
     for(let y=bh+1.4; y<skirt-0.4; y+=2.2) P(-hw, hw, y, y+0.7, st.wood2, 0.3);
 
     /* まど。出入口のところだけ空けておく */
-    const rows = wh > 26 ? 2 : 1;
-    const step = W / Math.max(1, Math.round(W/21));
-    const dTop = Math.min(wh - 2.6, skirt + Hpx*0.20);
-    for(let r=0; r<rows; r++){
-      const band = (wh - skirt - 1.4) / rows;
-      const y0 = skirt + 1.2 + r*band, y1 = y0 + band - 2.4;
-      if(y1 - y0 < 3.2) continue;
-      for(let x = -hw + step*0.5; x < hw - 2; x += step){
-        let near = false;
-        for(let i=0;i<doorsX.length;i++) if(Math.abs(x - doorsX[i]) < dw + step*0.45) near = true;
-        if(near && y0 < dTop + 1.8) continue;
-        const ww = Math.min(step*0.32, 7.5);
-        P(x-ww-1.0, x+ww+1.0, y0-1.0, y1+1.0, st.wood2, 0.3);      // 木わく
-        P(x-ww, x+ww, y0, y1, st.pane, 0.6);                       // 障子
-        P(x-0.45, x+0.45, y0, y1, st.wood2, 0.9);                  // さん
-        P(x-ww, x+ww, (y0+y1)/2-0.4, (y0+y1)/2+0.4, st.wood2, 0.9);
-      }
+    const wins = houseWindows(W, Hpx, st, grow, doorsX);
+    for(let i=0;i<wins.length;i++){
+      const q = wins[i], ww = q[2]/2, y0 = q[1] - q[3]/2, y1 = q[1] + q[3]/2, x = q[0];
+      P(x-ww-1.0, x+ww+1.0, y0-1.0, y1+1.0, st.wood2, 0.3);        // 木わく
+      P(x-ww, x+ww, y0, y1, pane, 0.6);                            // 障子
+      P(x-0.45, x+0.45, y0, y1, st.wood2, 0.9);                    // さん
+      P(x-ww, x+ww, q[1]-0.4, q[1]+0.4, st.wood2, 0.9);
     }
     /* 出入口 */
     for(let i=0;i<doorsX.length;i++){
       const x = doorsX[i], dh = Math.min(wh - 2.6, skirt + Hpx*0.20);
       P(x-dw-1.4, x+dw+1.4, bh-0.8, dh+1.6, st.wood2, 0.5);        // 枠
       P(x-dw, x+dw, bh, dh, '#43301e', 0.8);                       // 引き戸
-      P(x-dw+0.8, x-0.5, bh+0.8, dh-0.9, st.pane, 1.1);
-      P(x+0.5, x+dw-0.8, bh+0.8, dh-0.9, '#e2d9c1', 1.1);
+      P(x-dw+0.8, x-0.5, bh+0.8, dh-0.9, pane, 1.1);
+      P(x+0.5, x+dw-0.8, bh+0.8, dh-0.9, pane2, 1.1);
       for(let k=1;k<4;k++){
         const yy = bh + (dh-bh)*k/4;
         P(x-dw+0.8, x+dw-0.8, yy-0.35, yy+0.35, '#00000026', 1.4);
@@ -3532,21 +3550,34 @@ function drawHouse3(A, b){
   const up = grow + 12;
   const dx = [];
   for(let i=0;i<b.doors.length;i++) dx.push(b.doors[i]*16 + 8 - (b.c0*16 + W/2));
-  const s = propSprite(b.key, W + ox*2, Hpx + up + 10, ox + W/2, Hpx + up, ()=>{
+  /* 人の住む家だけ、夜は障子に明かりがともる（昼と夜で別の絵をとっておく） */
+  const lit = isNight() && (b.style === 'house' || b.style === 'inn');
+  const s = propSprite(b.key + (lit ? 'N' : ''), W + ox*2, Hpx + up + 10, ox + W/2, Hpx + up, ()=>{
     if(tower) buildTower(W, Hpx, Hpx + grow);
-    else buildHouse(W, Hpx, grow/Hpx, st, dx);
+    else buildHouse(W, Hpx, grow/Hpx, st, dx, lit);
   });
   blitProp(s, b.c0*16 + W/2, MAPY + (b.r1+1)*16);
+}
 
-  /* 夜は、まどにぼんやり明かりがつく */
-  if(isNight() && !tower && b.style !== 'shed'){
-    const y0 = MAPY + (b.r1+1)*16 - Math.round(Hpx*0.34);
-    const cx = b.doors.length ? b.doors[0]*16 + 8 : (b.c0 + b.c1 + 1)*8;
-    for(const o of [-30, 30]){
-      const x = cx + o;
-      if(x < b.c0*16 + 8 || x > (b.c1+1)*16 - 8) continue;
-      disc(x, y0, 14, 'rgba(255,214,140,0.13)');
-      px(x-4, y0-4, 8, 7, 'rgba(255,224,164,0.30)');
+/* ---- 夜のまどの明かり。暗くしたあとにのせないと、青くしずんでしまう ---- */
+function drawNightWindows(A){
+  if(A.indoor || !isNight()) return;
+  const HL = housesOf(A);
+  for(let i=0;i<HL.length;i++){
+    const b = HL[i];
+    if(b.style !== 'house' && b.style !== 'inn') continue;
+    const W = (b.c1-b.c0+1)*16, Hpx = (b.r1-b.r0+1)*16, st = HSTYLE[b.style];
+    const room = Math.max(0, (b.r1+1)*16 - 4 - Hpx);
+    const grow = Math.min(Math.round(Hpx*(st.over||0)), room) / Hpx;
+    const dx = [];
+    for(let k=0;k<b.doors.length;k++) dx.push(b.doors[k]*16 + 8 - (b.c0*16 + W/2));
+    const fx = b.c0*16 + W/2, fy = MAPY + (b.r1+1)*16;
+    const wins = houseWindows(W, Hpx, st, grow, dx);
+    for(let k=0;k<wins.length;k++){
+      const q = wins[k], sx = fx + q[0], sy = fy - q[1]*HK;
+      disc(sx, sy, 12, 'rgba(255,204,124,0.10)');
+      px(Math.round(sx - q[2]/2), Math.round(sy - q[3]*HK/2),
+         Math.round(q[2]), Math.max(3, Math.round(q[3]*HK)), 'rgba(255,214,146,0.36)');
     }
   }
 }
@@ -3756,6 +3787,7 @@ function drawMap(){
   list.sort((a,b)=>a.y-b.y).forEach(o=>o.d());
   drawWeather();
   drawLight();
+  if(OPT3D) drawNightWindows(A);
   drawAreaLabel();
   if(mode==='scene' && OPT3D && OPTBUST) drawBust();
 }
