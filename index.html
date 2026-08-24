@@ -1396,6 +1396,8 @@ function drawTile(t, gx, gy, area){
           px(x,y,16,3,'#7d5530'); px(x,y+13,16,3,'#7d5530');
           px(x+2,y+1,12,2,'#efe7d2'); px(x+2,y+14,12,2,'#efe7d2');
         }
+      } else if(OPT3D){
+        /* 外の玄関は、立体の建物のかべに描かれる */
       } else {
         px(x,y+1,16,14,'#43301e');                        // 玄関の引き戸
         px(x+1,y+2,6,11,'#efe7d2'); px(x+9,y+2,6,11,'#e2d9c1');
@@ -1471,6 +1473,7 @@ function drawTile(t, gx, gy, area){
       if(h>0.6) px(x+9,y+10,4,3,'#00000033');
       break;
     case 'H': {
+      if(OPT3D){ drawGround(base,x,y,gx,gy); break; }   // 立体のときは建物ごとあとで建てる
       const rw = area.rows;
       const isH = (xx,yy)=> rw[yy] && (rw[yy][xx]==='H');
       const down = rw[gy+1] && (rw[gy+1][gx]==='H' || rw[gy+1][gx]==='D');
@@ -2820,6 +2823,293 @@ function buildTorii(span){
 }
 
 /* =========================================================================
+   建物（立体）
+   ─ マップの 'H' がつながっているところを一けんの建物とみなし、
+     箱にかわらの屋根をのせる。
+   ─ このカメラは真横を向いた面がつぶれて見えなくなるので、
+     見えるのは「手前のかべ」「屋根の手前がわ」「棟」「妻の三角」だけ。
+     だから飾りはぜんぶ手前のかべにのせる。
+   ─ 大きさは、もとの四角のなかにぴったり収まるように決める。
+       おくゆき÷2 ＋ (かべ＋棟)×1.3 ＝ 四角の高さ
+     という配分にすれば、となりのマスをふさがない。
+   ─ 一けんにつき一度だけ立体で描いて絵にしておき、あとは貼るだけ。
+   ========================================================================= */
+
+/* d:おくゆき  w:かべ  r:棟の立ち上がり  over:上にはみ出してよい分
+   （どれも、その四角の高さに対する画面上の割合。
+     d/2 + w + r ＝ 0.97 + over が屋根のてっぺんの高さになる） */
+const HSTYLE = {
+  /* 町の小さな家 */
+  house:{ d:0.40, w:0.47, r:0.30, over:0.13, ez:3.4, ex:4.2,
+          roof:'#6d7d8e', roofT:'#8d9dae', roofS:'#4f5d6c', ridge:'#3a4652',
+          wall:'#e6ddc6', wallS:'#c6b99d', eave:'#4a3a2a',
+          base:'#6a6058', wood:'#8a6a44', wood2:'#5d4126', pane:'#efe7d2' },
+  /* 民宿 */
+  inn:{   d:0.34, w:0.49, r:0.30, over:0.11, ez:3.6, ex:4.8,
+          roof:'#66788a', roofT:'#8a9cae', roofS:'#495969', ridge:'#333f4a',
+          wall:'#eae2cc', wallS:'#c8bb9f', eave:'#46372a',
+          base:'#6e6458', wood:'#a07a4c', wood2:'#6d4826', pane:'#f2ecd8' },
+  /* 廃校 */
+  school:{d:0.32, w:0.55, r:0.25, over:0.11, ez:3.2, ex:4.0,
+          roof:'#5e5a52', roofT:'#7a766c', roofS:'#46433c', ridge:'#332f2a',
+          wall:'#b99a6c', wallS:'#9a7d52', eave:'#4a3a28',
+          base:'#6b6358', wood:'#8a6a44', wood2:'#5a4128', pane:'#cfd8d2' },
+  /* 倉庫（切妻・少し背が高い） */
+  shed:{  d:0.36, w:0.72, r:0.26, over:0.28, ez:2.6, ex:3.0, gable:1,
+          roof:'#8b8f92', roofT:'#a3a7aa', roofS:'#6a6e71', ridge:'#565a5d',
+          wall:'#9a9288', wallS:'#7c756c', eave:'#4e4a44',
+          base:'#5c6167', wood:'#7a6a52', wood2:'#54483a', pane:'#5a6266' },
+  /* お社 */
+  yashiro:{d:0.32, w:0.42, r:0.34, over:0.10, ez:5.0, ex:7.4, gable:1,
+          roof:'#4a5a4e', roofT:'#66786a', roofS:'#37453b', ridge:'#28332c',
+          wall:'#efe9da', wallS:'#cec7b4', eave:'#8f3a2c',
+          base:'#8a8478', wood:'#c05543', wood2:'#8f3a2c', pane:'#efe9da' }
+};
+
+/* ---- 'H' のかたまりをさがす（エリアごとに一度だけ） ---- */
+const HOUSES = {};
+function housesOf(A){
+  let list = HOUSES[A.name];
+  if(list) return list;
+  list = [];
+  const seen = {};
+  for(let gy=0; gy<MH; gy++) for(let gx=0; gx<MW; gx++){
+    if(A.rows[gy][gx] !== 'H' || seen[gy*64+gx]) continue;
+    let c0=gx, c1=gx, r0=gy, r1=gy;
+    const st = [gx, gy];
+    seen[gy*64+gx] = 1;
+    while(st.length){
+      const y = st.pop(), x = st.pop();
+      if(x<c0)c0=x; if(x>c1)c1=x; if(y<r0)r0=y; if(y>r1)r1=y;
+      const nb = [x+1,y, x-1,y, x,y+1, x,y-1];
+      for(let i=0;i<8;i+=2){
+        const nx = nb[i], ny = nb[i+1];
+        if(nx<0 || ny<0 || nx>=MW || ny>=MH) continue;
+        const k = ny*64+nx;
+        if(seen[k] || A.rows[ny][nx] !== 'H') continue;
+        seen[k] = 1; st.push(nx, ny);
+      }
+    }
+    /* 出入口は、かたまりの中か、すぐ下の段にある 'D' のマス */
+    const doors = [];
+    for(let y=r0; y<=r1+1 && y<MH; y++)
+      for(let x=c0; x<=c1; x++)
+        if(A.rows[y][x] === 'D' && doors.indexOf(x) < 0) doors.push(x);
+    list.push({c0:c0, c1:c1, r0:r0, r1:r1, doors:doors,
+               key:A.name + '#' + list.length, style:houseStyle(A)});
+  }
+  HOUSES[A.name] = list;
+  return list;
+}
+function houseStyle(A){
+  if(A === MAPS.shrine) return 'yashiro';
+  if(A === MAPS.haikou) return 'school';
+  if(A === MAPS.souko)  return 'shed';
+  if(A === MAPS.todai)  return 'tower';
+  if(A === MAPS.yard)   return 'inn';
+  return 'house';
+}
+
+/* ---- 一けんぶんの立体 ---- */
+function buildHouse(W, Hpx, grow, st, doorsX){
+  const hw = W/2;
+  const D    = Hpx * st.d;                       // おくゆき
+  const wh   = Hpx * (st.w + grow) / HK;         // かべの高さ
+  const rise = Hpx * st.r / HK;                  // 棟までの立ち上がり
+  const hd   = D/2;
+  const ez = st.ez, ex = st.ex;                  // ひさしの出（おく／よこ）
+  const bh = Math.max(1.8, Hpx*0.035);           // 土台の高さ
+  const fz = hd + 0.6;                           // かべのすぐ手前
+  const shrine = (st === HSTYLE.yashiro);
+
+  V3.move(0, 0, -hd);
+
+  /* かべにのせる板。高さぶんの下駄をそろえて、かべより必ず手前にする */
+  const P = (x0, x1, y0, y1, col, e)=>{
+    if(x1 - x0 < 0.5 || y1 - y0 < 0.5) return;
+    V3.poly([[x0,y0,fz],[x1,y0,fz],[x1,y1,fz],[x0,y1,fz]],
+            col, (wh - (y0+y1)/2)/HK + 1.2 + (e||0));
+  };
+
+  V3.box(hw+1.0, hd+1.0, hw+0.9, hd+0.9, 0, bh, st.base, st.base, st.base);   // 土台
+  V3.box(hw, hd, hw, hd, bh, wh, st.wall, st.wall, st.wallS);                 // かべ
+
+  const dw = Math.min(11, Math.max(6.5, W*0.055));      // 出入口の半分の幅
+
+  if(shrine){
+    /* お社：朱のはしらと、そのあいだの白かべ */
+    const n = Math.max(3, Math.round(W/26)), pw = 2.2;
+    for(let i=0;i<=n;i++){
+      const x = -hw + W*i/n;
+      P(x-pw, x+pw, bh, wh, st.wood, 0.4);
+      P(x-pw, x-pw+0.9, bh, wh, st.wood2, 0.6);
+    }
+    P(-hw, hw, wh-3.2, wh-0.5, st.wood, 0.9);           // 長押
+    P(-hw, hw, bh, bh+1.5, st.wood2, 0.9);
+    for(let i=0;i<doorsX.length;i++){                   // 御扉
+      const x = doorsX[i];
+      P(x-dw-1.2, x+dw+1.2, bh, wh-3.6, st.wood2, 1.1);
+      P(x-dw, x-0.5, bh+0.9, wh-4.6, '#4a3a2a', 1.4);
+      P(x+0.5, x+dw, bh+0.9, wh-4.6, '#4a3a2a', 1.4);
+    }
+  } else if(st === HSTYLE.shed){
+    /* 倉庫：波板のかべと、大きな引き戸 */
+    for(let x=-hw; x<hw-0.9; x+=4.4){
+      P(x, x+2.2, bh, wh, st.wall, 0.2);
+      P(x+2.2, Math.min(x+4.4, hw), bh, wh, st.wallS, 0.2);
+    }
+    P(-hw, hw, bh, bh+1.7, st.wood2, 0.5);
+    P(-hw, hw, wh-1.7, wh, st.wood2, 0.5);
+    const nd = Math.max(2, Math.round(W/78));
+    for(let i=0;i<nd;i++){
+      const cx = -hw + W*(i+0.5)/nd;
+      const dhw = Math.min(21, W/nd*0.33), dh = Math.min(wh-3.4, bh + Hpx*0.44);
+      P(cx-dhw-1.5, cx+dhw+1.5, bh-0.7, dh+1.5, st.wood2, 0.6);      // レール
+      P(cx-dhw, cx+dhw, bh, dh, '#5a6266', 0.9);
+      for(let x=cx-dhw+1.6; x<cx+dhw-1.2; x+=3.4) P(x, x+1.5, bh+1.0, dh-1.0, '#4e565a', 1.2);
+      P(cx-0.7, cx+0.7, bh, dh, '#3f4649', 1.5);                     // 合わせ目
+    }
+    for(let x=-hw+9; x<hw-6; x+=17){                                 // 高まど
+      P(x-4.6, x+4.6, wh-6.4, wh-2.6, st.wood2, 0.6);
+      P(x-3.6, x+3.6, wh-5.8, wh-3.2, '#3b4448', 0.9);
+    }
+  } else {
+    /* こしまわりの下見板 */
+    const skirt = Math.min(bh + Hpx*0.13, bh + wh*0.42);
+    P(-hw, hw, bh, skirt, st.wood);
+    for(let y=bh+1.4; y<skirt-0.4; y+=2.2) P(-hw, hw, y, y+0.7, st.wood2, 0.3);
+
+    /* まど。出入口のところだけ空けておく */
+    const rows = wh > 26 ? 2 : 1;
+    const step = W / Math.max(1, Math.round(W/21));
+    const dTop = Math.min(wh - 2.6, skirt + Hpx*0.20);
+    for(let r=0; r<rows; r++){
+      const band = (wh - skirt - 1.4) / rows;
+      const y0 = skirt + 1.2 + r*band, y1 = y0 + band - 2.4;
+      if(y1 - y0 < 3.2) continue;
+      for(let x = -hw + step*0.5; x < hw - 2; x += step){
+        let near = false;
+        for(let i=0;i<doorsX.length;i++) if(Math.abs(x - doorsX[i]) < dw + step*0.45) near = true;
+        if(near && y0 < dTop + 1.8) continue;
+        const ww = Math.min(step*0.32, 7.5);
+        P(x-ww-1.0, x+ww+1.0, y0-1.0, y1+1.0, st.wood2, 0.3);      // 木わく
+        P(x-ww, x+ww, y0, y1, st.pane, 0.6);                       // 障子
+        P(x-0.45, x+0.45, y0, y1, st.wood2, 0.9);                  // さん
+        P(x-ww, x+ww, (y0+y1)/2-0.4, (y0+y1)/2+0.4, st.wood2, 0.9);
+      }
+    }
+    /* 出入口 */
+    for(let i=0;i<doorsX.length;i++){
+      const x = doorsX[i], dh = Math.min(wh - 2.6, skirt + Hpx*0.20);
+      P(x-dw-1.4, x+dw+1.4, bh-0.8, dh+1.6, st.wood2, 0.5);        // 枠
+      P(x-dw, x+dw, bh, dh, '#43301e', 0.8);                       // 引き戸
+      P(x-dw+0.8, x-0.5, bh+0.8, dh-0.9, st.pane, 1.1);
+      P(x+0.5, x+dw-0.8, bh+0.8, dh-0.9, '#e2d9c1', 1.1);
+      for(let k=1;k<4;k++){
+        const yy = bh + (dh-bh)*k/4;
+        P(x-dw+0.8, x+dw-0.8, yy-0.35, yy+0.35, '#00000026', 1.4);
+      }
+      P(x-dw-2.4, x+dw+2.4, bh-1.4, bh+0.3, st.wood, 1.6);         // 上がりかまち
+    }
+  }
+
+  /* --- 屋根 ---
+     かべの飾りより必ずうしろにならないよう、屋根はまとめて下駄をはかせる */
+  V3.bias(Hpx * 1.6);
+  const rw = hw + ex, rd = hd + ez;
+  const kw = st.gable ? rw : Math.max(hw*0.15, rw - rd);
+  const eh = Math.max(1.5, Hpx*0.024);
+  V3.box(rw, rd, rw, rd, wh, wh + eh, st.eave, st.eave, st.eave);   // 鼻かくし
+  const e0 = wh + eh;
+  V3.box(rw, rd, kw, 0.7, e0, e0 + rise, st.roof, st.ridge, st.roofS);
+  /* かわらの筋。流れの向きに走らせる */
+  const nst = Math.max(4, Math.round(W/6.5));
+  for(let i=0;i<=nst;i++){
+    const u = -1 + 2*i/nst, a = u*rw, b = u*kw;
+    const t = Math.min(1.5, rw/nst*0.5);
+    V3.poly([[a-t, e0, rd],[a+t, e0, rd],[b+t*0.7, e0+rise, 0.7],[b-t*0.7, e0+rise, 0.7]],
+            (i & 1) ? st.roofS : st.roofT, 0.6);
+  }
+  V3.box(kw+1.6, 1.6, kw+1.6, 1.6, e0+rise-0.5, e0+rise+1.3, st.ridge, st.ridge, st.ridge);
+  if(shrine){
+    for(let i=-1;i<=1;i++){                                          // かつお木（棟をまたいで寝かせる）
+      V3.push().move(i*kw*0.46, e0+rise+2.2, 0).rotX(Math.PI/2);
+      V3.prism(8, 2.0, 2.0, -5.0, 5.0, '#b08a4a', '#8a6a34', 0.4);
+      V3.pop();
+    }
+    for(const sd of [-1, 1]){                                        // ち木（×に組む）
+      for(const t of [-1, 1]){
+        V3.push().move(sd*(kw-1.4), e0+rise-1.5, t*3.0).rotZ(-sd*0.42);
+        V3.box(1.0, 1.0, 1.0, 1.0, 0, 5.5, '#b08a4a', '#8a6a34', '#8a6a34');
+        V3.pop();
+      }
+    }
+  }
+  V3.bias(0);
+
+  if(shrine){                                                        // きざはし
+    const sw = Math.max(9, W*0.15);
+    for(let i=0;i<4;i++)
+      V3.box(sw, hd + ez*0.4 + i*1.6, sw, hd + ez*0.4 + i*1.6,
+             bh*(3-i)/4 - 0.1, bh*(3-i)/4 + 0.5, st.base, '#b6b0a3', st.base);
+  }
+}
+
+/* ---- 灯台 ---- */
+function buildTower(W, Hpx, Htot){
+  const tz = Hpx * 0.34;                                                 // 石だたみの奥ゆき
+  V3.push().move(0, 0, -tz);
+  V3.box(W*0.5, tz, W*0.47, tz*0.94, 0, 3.4, '#9aa0a6', '#b4bac0', '#787e85');
+  V3.pop();
+  V3.move(0, 3.4, -tz);
+  const r = Math.min(W*0.24, 13);
+  const h = (Htot - tz - 3.4) / (1.19 * HK);
+  V3.prism(12, r*1.22, r*1.06, -3.4, 1.0, '#8a8478', '#a9a396');
+  V3.prism(12, r, r*0.74, 1.0, h*0.79, '#efeee8', '#dcdad0');
+  V3.prism(12, r*0.78, r*0.78, h*0.79, h*0.83, '#c04b3a', '#d4604a');
+  V3.prism(12, r*0.94, r*0.94, h*0.83, h*0.87, '#9aa0a6', '#c2c6ca');    // 手すり
+  V3.prism(8,  r*0.64, r*0.64, h*0.87, h*1.00, '#e8c46a', '#f2dc9a');    // ランプ室
+  V3.prism(8,  r*0.82, 0.5,    h*1.00, h*1.13, '#c04b3a', '#c04b3a');
+  V3.box(0.6, 0.6, 0.6, 0.6, h*1.13, h*1.19, '#5c6167', '#5c6167', '#5c6167');
+  for(let i=0;i<3;i++){                                                  // まど
+    const y = 9 + i*(h*0.70 - 12)/2;
+    V3.rect(0, y, r*(1 - 0.26*y/h) + 0.8, 3, 4, '#3a4652', 3);
+  }
+  V3.rect(0, 4.8, r*1.02, 5, 7, '#4a3a2a', 3);                           // 鉄の扉
+}
+
+/* ---- 建物を一けん描く ---- */
+function drawHouse3(A, b){
+  const W = (b.c1 - b.c0 + 1) * 16, Hpx = (b.r1 - b.r0 + 1) * 16;
+  const tower = b.style === 'tower';
+  const st = HSTYLE[b.style] || HSTYLE.house;
+  /* 画面の上のふちを越えないように、はみ出してよい分をおさえる */
+  const room = Math.max(0, (b.r1 + 1) * 16 - 4 - Hpx);
+  const grow = Math.min(Math.round(Hpx * (tower ? 0.28 : (st.over || 0))), room);
+  const ox = Math.ceil(tower ? W*0.28 + 6 : st.ex + 8);
+  const up = grow + 12;
+  const dx = [];
+  for(let i=0;i<b.doors.length;i++) dx.push(b.doors[i]*16 + 8 - (b.c0*16 + W/2));
+  const s = propSprite(b.key, W + ox*2, Hpx + up + 10, ox + W/2, Hpx + up, ()=>{
+    if(tower) buildTower(W, Hpx, Hpx + grow);
+    else buildHouse(W, Hpx, grow/Hpx, st, dx);
+  });
+  blitProp(s, b.c0*16 + W/2, MAPY + (b.r1+1)*16);
+
+  /* 夜は、まどにぼんやり明かりがつく */
+  if(isNight() && !tower && b.style !== 'shed'){
+    const y0 = MAPY + (b.r1+1)*16 - Math.round(Hpx*0.34);
+    const cx = b.doors.length ? b.doors[0]*16 + 8 : (b.c0 + b.c1 + 1)*8;
+    for(const o of [-30, 30]){
+      const x = cx + o;
+      if(x < b.c0*16 + 8 || x > (b.c1+1)*16 - 8) continue;
+      disc(x, y0, 14, 'rgba(255,214,140,0.13)');
+      px(x-4, y0-4, 8, 7, 'rgba(255,224,164,0.30)');
+    }
+  }
+}
+
+/* =========================================================================
    会話中の顔（バストアップ）
    ========================================================================= */
 let talkFace = '';            // いましゃべっている人
@@ -3008,6 +3298,13 @@ function drawMap(){
   const list = visibleNPCs().map(n=>({y:n.y, d:()=>drawNPC(n)}));
   list.push({y:G.y, d:drawPlayer});
   if(G.area==='shrine' && OPT3D) list.push({y:19.4, d:drawTorii3});
+  if(OPT3D){
+    const HL = housesOf(A);
+    for(let i=0;i<HL.length;i++){
+      const b = HL[i];
+      list.push({y:b.r1 + 0.85, d:()=>drawHouse3(A, b)});
+    }
+  }
   list.sort((a,b)=>a.y-b.y).forEach(o=>o.d());
   drawWeather();
   drawLight();
