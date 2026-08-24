@@ -1897,6 +1897,10 @@ const V3 = (function(){
      表情が変わると形そのものが差しかわる。
    ========================================================================= */
 const FBIAS = 4.0;                       // 顔のパーツは頭より必ず手前に
+/* 生えぎわの高さ（頭の高さに対する割合）。
+   髪と目のあいだに、はだの行を一行かならず残すために、
+   髪を組むほうと顔を置くほうで、この同じ数を使う。 */
+const HAIRY = 0.66;
 
 /* ---- 目：上下のまぶたで切りとった楕円 ---- */
 function eyeOval(rx, ry, topA, topB, botA, botB){
@@ -2073,7 +2077,6 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
   const f = look.f || {};
   const dark = f.eyeCol || '#2b2119';
   const lip  = f.lipCol || '#8f4a3e';              // 口は目と色を変える。ならんでも溶けない
-  const PY = 1/HK;
   /* 顔のパーツは、頭の前面に貼った平らな板ではなく、
      頭のまるみに沿わせて置く。平らなままだと、横を向いたとき
      目が顔の前ふちまですべっていって、はみ出して見える。
@@ -2085,11 +2088,14 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
   /* 顔の段どりは「画面のピクセル」で組む。頭は画面で6pxそこそこしかないので、
      頭の大きさの割合で並べると、目と口がくっついたり、口があごからはみ出したりする。
      V() は「頭の中心から画面で何px下か」を、頭の中の高さに直すもの。 */
-  const V  = sy => -sy * PY;
-  const top = -hh*0.56*HK;                         // 生えぎわ（画面）
-  const bot =  hh*HK;                              // あご（画面）
-  const eyeY = top + 1.45;                         // 目：生えぎわの1.5px下
-  const mouY = bot - 1.15;                         // 口：あごの1px上
+  /* 画面での位置は、あごから上へ数える。こうすると、頭の大きさが多少ちがっても
+     「髪／はだ一行／目／口／あご」の並びがくずれない。
+       あご ─0行─ 口 ─1行─ 目 ─1行(はだ)─ 生えぎわ
+     もとのドット絵も、この並びだった。 */
+  const chin = hd + hh*HK;                         // あご（画面。頭の中心から下へ）
+  const brow = hd - hh*HAIRY*HK;                   // 生えぎわ（髪の下ばし）
+  const eyeY = chin - 3.0;
+  const mouY = chin - 1.5;
 
   /* 横を向くと、両目のあいだが遠近でつまる。つまったぶんだけ左右にひらいて、
      画面の上での間隔を保つ。こうしないと目がふたつくっついて一本の線になる。 */
@@ -2102,7 +2108,11 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
   const hide = Math.abs(turn) > 0.78 ? (turn > 0 ? 1 : -1) : 0;
   const shift = hide ? hide*ex*0.55 : 0;
 
-  const R = (x, sy, w, h, col, e)=>V3.rect(x, V(sy), zAt(x), w, h, col, FBIAS + (e || 0));
+  /* sy は「頭の中心から画面で何px下か」。顔のまるみのぶんは中で差しひく。 */
+  const R = (x, sy, w, h, col, e)=>{
+    const zz = zAt(x);
+    return V3.rect(x, (zz - sy)/HK, zz, w, h, col, FBIAS + (e || 0));
+  };
 
   /* ---- 目 ----
      この大きさではまゆを描く場所がないので、まゆの気もちは目の形で見せる。
@@ -2154,7 +2164,7 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
       if(side === hide) continue;
       R(side*(ex + 1.4) + shift, eyeY + 1.2, 2, 1, '#e07a6c', 0.02);
     }
-  if(S.sweat) R(ex + 1.6 + shift, top + 0.6 - ((frameCount % 96)/96)*2.5, 1, 2, '#94d4f0', 0.2);
+  if(S.sweat) R(ex + 1.6 + shift, brow + 0.6 - ((frameCount % 96)/96)*2.5, 1, 2, '#94d4f0', 0.2);
   if(S.tear){
     const t = (frameCount % 64)/64;
     for(const side of [-1, 1]){
@@ -2163,15 +2173,17 @@ function drawFaceSmall(hw, hh, hd, look, S, talking){
     }
   }
   if(S.mad){
-    R(ex + 1.5 + shift, top + 0.4, 3, 1, '#d2483c', 0.2);
-    R(ex + 1.5 + shift, top + 0.4, 1, 3, '#d2483c', 0.2);
+    R(ex + 1.5 + shift, brow + 0.4, 3, 1, '#d2483c', 0.2);
+    R(ex + 1.5 + shift, brow + 0.4, 1, 3, '#d2483c', 0.2);
   }
   if(look.glasses){
+    /* レンズは目より先に、うすい色で。あとから目をのせるので、
+       黒い横棒で目がつぶれてしまうことがない。 */
     for(const side of [-1, 1]){
       if(side === hide) continue;
-      R(side*ex + shift, eyeY, 3, 1, '#3b3b40', 0.24);
+      R(side*ex + shift, eyeY, 4, 3, 'rgba(198,218,230,0.42)', -0.08);
     }
-    if(!hide) R(shift, eyeY, 1, 1, '#3b3b40', 0.24);
+    if(!hide) R(shift, eyeY - 0.5, 3, 1, 'rgba(74,82,90,0.70)', -0.04);
   }
 }
 
@@ -2376,22 +2388,24 @@ function spec3(p){
 function hairCrown(hw, hh, hd, col, y0, y1, k){
   k = k || 1;
   const m = y0 + (y1 - y0)*0.60;
-  V3.box(hw*1.05*k, hd*1.08*k, hw*1.03*k, hd*1.06*k, y0, m, col);
-  V3.box(hw*1.03*k, hd*1.06*k, hw*0.66*k, hd*0.68*k, m, y1, col, col);
+  V3.box(hw*1.05*k, hd*1.00*k, hw*1.03*k, hd*0.98*k, y0, m, col);
+  V3.box(hw*1.03*k, hd*0.98*k, hw*0.66*k, hd*0.64*k, m, y1, col, col);
 }
 function build3Hair(style, hw, hh, hd, col){
   const dk = col;
-  const HL = hh*0.56;                                  // 生えぎわ。これより下は顔
+  const HL = hh*HAIRY;                                 // 生えぎわ。これより下は顔
   /* うしろ髪の土台（えり足まで） */
   const nape = (y0, zk, wk)=>{
     V3.push().move(0, 0, -hd*(zk===undefined?0.42:zk));
     V3.box(hw*1.03*(wk||1), hd*0.66, hw*1.02*(wk||1), hd*0.64, y0, HL + hh*0.14, dk);
     V3.pop();
   };
-  /* 前がみ（額にかかるひとふさ。まゆには重ならない高さで止める） */
+  /* 前がみ（額にかかるひとふさ）。
+     手前に出しすぎると、画面では下へさがって目にかぶさってしまうので、
+     出っぱりは髪の本体とそろえ、下ばしは生えぎわで止める。 */
   const bang = (x0, x1, drop)=>{
-    V3.push().move((x0+x1)/2*hw, HL - hh*(drop||0.06), hd*0.94);
-    V3.box(hw*(x1-x0)/2, hd*0.16, hw*(x1-x0)/2, hd*0.16, 0, hh*0.52, dk);
+    V3.push().move((x0+x1)/2*hw, HL - hh*(drop||0.02)*0.5, hd*0.86);
+    V3.box(hw*(x1-x0)/2, hd*0.13, hw*(x1-x0)/2, hd*0.13, 0, hh*0.50, dk);
     V3.pop();
   };
   switch(style){
@@ -2476,11 +2490,13 @@ function build3Hair(style, hw, hh, hd, col){
 function build3Hat(kind, hw, hh, hd, col){
   const dark = col;
   if(kind === 'cap'){
-    V3.push().move(0, hh*0.62, -hd*0.06);
-    V3.prism(8, hw*1.10, hw*0.86, 0, hh*0.72, dark, dark, Math.PI/8);
+    /* 帽子は頭とおなじ厚みにつぶす。まるいままだと前へ大きく出っぱって、
+       画面では目の高さまでさがってきてしまう。 */
+    V3.push().move(0, hh*0.60, -hd*0.10).sc(1, 1, hd/hw);
+    V3.prism(8, hw*1.10, hw*0.86, 0, hh*0.78, dark, dark, Math.PI/8);
     V3.pop();
-    V3.push().move(0, hh*0.66, hd*1.02);                 // つば
-    V3.box(hw*0.92, hd*0.62, hw*0.72, hd*0.62, 0, hh*0.10, dark);
+    V3.push().move(0, hh*0.78, hd*0.78);                 // つば
+    V3.box(hw*0.92, hd*0.48, hw*0.72, hd*0.48, 0, hh*0.09, dark);
     V3.pop();
   } else if(kind === 'towelH'){
     V3.push().move(0, hh*0.30, 0);
@@ -2492,11 +2508,13 @@ function build3Hat(kind, hw, hh, hd, col){
       V3.pop();
     }
   } else {                                               // 麦わら帽子
-    V3.push().move(0, hh*0.74, 0);
+    V3.push().move(0, hh*0.74, 0).sc(1, 1, 0.72);        // 見おろす角度ぶん、奥ゆきをつぶす
     V3.prism(10, hw*2.05, hw*1.90, 0, hh*0.10, dark, dark);          // つば
+    V3.push().sc(1, 1, hd/hw*1.55);
     V3.prism(10, hw*1.14, hw*0.88, hh*0.06, hh*0.86, dark, dark);    // 山
     V3.push().move(0, hh*0.30, 0);
     V3.prism(10, hw*1.18, hw*1.18, 0, hh*0.12, '#b8763c', '#b8763c');// リボン
+    V3.pop();
     V3.pop();
     V3.pop();
   }
