@@ -1521,11 +1521,14 @@ function drawTile(t, gx, gy, area){
       if((dn||up) && (lf||rt)) px(x + (rt?11:1), y + (dn?11:1), 4, 4, BD);   // 柱
       break; }
     case 'v':
-      px(x,y,16,16,C.wood2); px(x,y+2,16,3,C.wood); px(x,y+9,16,3,C.wood);
+      px(x,y,16,16,C.wood2);
+      if(OPT3D){ px(x,y,16,2,'#00000018'); break; }   // 棚はあとで立体で置く
+      px(x,y+2,16,3,C.wood); px(x,y+9,16,3,C.wood);
       px(x+2,y+5,3,4,C.red); px(x+7,y+5,3,4,C.gold); px(x+11,y+12,3,3,'#6fae4e');
       break;
     case 'f':
       drawGround(base,x,y,gx,gy);
+      if(OPT3D) break;                                 // 柵はあとで立体で建てる
       px(x+1,y+4,2,10,C.wood2); px(x+13,y+4,2,10,C.wood2);
       px(x,y+6,16,2,C.wood); px(x,y+10,16,2,C.wood);
       break;
@@ -2952,6 +2955,13 @@ function buildHouse(W, Hpx, grow, st, doorsX, lit){
   const pane = lit ? '#ffd894' : st.pane;        // 夜は障子に明かりがともる
   const pane2 = lit ? '#f7c878' : '#e2d9c1';
 
+  /* 地面との境に、うすい影をしいて浮いて見えないようにする */
+  const O = V3.here();
+  ctx.fillStyle = 'rgba(26,30,22,0.20)';
+  ctx.fillRect(Math.round(O[0]-hw-ex), Math.round(O[1]), Math.round(W+ex*2), 2);
+  ctx.fillStyle = 'rgba(26,30,22,0.11)';
+  ctx.fillRect(Math.round(O[0]-hw-ex+2), Math.round(O[1]+2), Math.round(W+ex*2-4), 2);
+
   V3.move(0, 0, -hd);
 
   /* かべにのせる板。高さぶんの下駄をそろえて、かべより必ず手前にする */
@@ -3084,29 +3094,45 @@ function buildHouse(W, Hpx, grow, st, doorsX, lit){
      つながっているマスをまとめて一つに組み立てる。
    ========================================================================= */
 function objKind(A, gx, gy){
+  const at = (x, y)=> gx === x && gy === y;
   if(A===MAPS.yard)        return gx<8 ? 'hoshi' : 'ido';
   if(A===MAPS.town)        return gy>16 ? (gx<8 ? 'post' : 'board') : 'kaki';
-  if(A===MAPS.vacant)      return gy<10 ? 'incin' : (gx<8 ? 'shige' : 'tyre');
+  if(A===MAPS.vacant)      return gy<10 ? 'dokan' : (gx<8 ? 'shige' : 'tyre');
   if(A===MAPS.beach)       return gx<8 ? 'nagare' : 'sunayama';
   if(A===MAPS.cave)        return 'iwa';
-  if(A===MAPS.river)       return 'iwa';
+  if(A===MAPS.river)       return gx>10 ? 'kaki' : 'iwa';       // 木の下／河原の石
   if(A===MAPS.mountain)    return gy>15 ? 'taiboku' : 'shige';
-  if(A===MAPS.base)        return gy<10 ? 'itakabe' : (gx<9 ? 'hako' : 'tana');
-  if(A===MAPS.shrine)      return 'temizu';
-  if(A===MAPS.shrine_back) return gy<7 ? 'tana' : (gy<12 ? 'hako' : 'iwa');
+  if(A===MAPS.base)        return gy<10 ? 'itakabe' : (gx<9 ? 'hako' : 'rakugaki');
+  if(A===MAPS.shrine)      return gx<8 ? 'temizu' : 'ishidouro';
+  if(A===MAPS.shrine_back){
+    if(at(5,5))   return 'emakake';                              // 絵馬かけ
+    if(at(12,5))  return 'kaki';                                 // 大きな木
+    if(gy<12)     return 'hako';                                 // 物置
+    if(at(12,15)) return 'ido';                                  // 古い井戸
+    return 'shige';                                              // 草むら
+  }
   if(A===MAPS.harbor)      return gx<8 ? 'ami' : 'hako';
   if(A===MAPS.haikou)      return gy===14 ? 'tetsubo' : (gy===12 ? 'kadan' : 'zou');
-  if(A===MAPS.kyoushitsu)  return gx===3 ? 'tana' : 'tsukue';
-  if(A===MAPS.todai)       return gy>10 ? 'iwa' : 'ishibashira';
-  if(A===MAPS.souko)       return 'hako';
-  if(A===MAPS.well)        return gy<14 ? 'kikai' : 'iwa';
+  if(A===MAPS.kyoushitsu)  return gx===3 ? 'organ' : 'tsukue';
+  if(A===MAPS.todai)       return gy<10 ? 'iwabench' : 'iwa';
+  if(A===MAPS.souko)       return at(8,10) ? 'ami' : 'hako';
+  if(A===MAPS.well)        return gy<14 ? 'hashigo' : 'kubomi';
   if(A===MAPS.shop)        return gy<12 ? 'tanadai' : 'reizoko';
   if(A===MAPS.house_radio) return 'rajio';
   if(A===MAPS.house_girl)  return gx<8 ? 'chikuonki' : 'kotansu';
   if(A===MAPS.hokora)      return 'hokora';
   return 'iwa';
 }
-const XGROUP = {hokora:1, incin:1};      // つながったマスをひとまとめにするもの
+const XGROUP = {hokora:1, dokan:1};      // つながったマスをひとまとめにするもの
+
+/* かべぎわの棚は、となりのならびかたで向きを決める */
+function shelfKind(A, gx, gy){
+  const R = A.rows;
+  const yoko = (R[gy][gx-1] === 'v') || (R[gy][gx+1] === 'v');
+  const tate = (R[gy-1] && R[gy-1][gx] === 'v') || (R[gy+1] && R[gy+1][gx] === 'v');
+  if(tate && !yoko) return (R[gy][gx-1] === '#') ? 'tanaVL' : 'tanaVR';
+  return 'tanaH';
+}
 
 const XPROPS = {};
 function xPropsOf(A){
@@ -3115,7 +3141,10 @@ function xPropsOf(A){
   list = [];
   const seen = {};
   for(let gy=0; gy<MH; gy++) for(let gx=0; gx<MW; gx++){
-    if(A.rows[gy][gx] !== 'x' || seen[gy*64+gx]) continue;
+    const c = A.rows[gy][gx];
+    if(c === 'v'){ list.push({gx:gx, gy:gy, w:1, h:1, k:shelfKind(A, gx, gy)}); continue; }
+    if(c === 'f'){ list.push({gx:gx, gy:gy, w:1, h:1, k:'fence'}); continue; }
+    if(c !== 'x' || seen[gy*64+gx]) continue;
     const k = objKind(A, gx, gy);
     seen[gy*64+gx] = 1;
     if(!XGROUP[k]){ list.push({gx:gx, gy:gy, w:1, h:1, k:k}); continue; }
@@ -3139,38 +3168,100 @@ function xPropsOf(A){
   return list;
 }
 
+/* たてにならぶ棚のなかみ */
+function shelfSide(ox, v){
+  V3.push().move(ox, 0, -8.0);
+  V3.box(3.0, 8.0, 3.0, 8.0, 0, 9.2, '#6d4826', '#8a6a44', '#553618');
+  const G = [['#c85a4a','#e8c46a'],['#e8c46a','#cfe0e8'],['#6a9a4a','#d8c9a0']][v];
+  for(let i=-1;i<=1;i++){
+    V3.rect(-0.6, 9.4, i*5.0 + 1.4, 4, 3, G[(i + 1) % 2], 6);
+    V3.rect( 1.0, 9.4, i*5.0 - 1.6, 3, 3, '#b8a888', 6);
+  }
+  V3.pop();
+}
+
 /* ---- 組み立てかた。[絵の幅, 高さ, 足もとのx, 足もとのy, つくる] ---- */
 const XART = {
 
 /* 物干し */
-hoshi:[40, 34, 20, 28, ()=>{
-  for(const s of [-1, 1]){
-    V3.push().move(s*7.6, 0, 0);
-    V3.box(1.0, 1.0, 0.85, 0.85, 0, 14.0, C.wood2, C.wood, '#6d4826');
+hoshi:[42, 36, 21, 29, ()=>{
+  for(const s of [-1, 1]){                                       // 二本の柱
+    V3.push().move(s*8.6, 0, 0);
+    V3.box(0.85, 0.85, 0.7, 0.7, 0, 13.8, C.wood2, C.wood, '#6d4826');
+    V3.box(2.0, 0.75, 2.0, 0.75, 11.6, 12.3, C.wood, C.wood3, '#6d4826');
     V3.pop();
   }
-  V3.box(9.0, 0.7, 9.0, 0.7, 13.2, 14.2, C.wood, C.wood3, '#6d4826');
-  V3.poly([[-6.6,4.6,0.9],[-2.0,4.6,0.9],[-2.0,13.2,0.9],[-6.6,13.2,0.9]], C.white, 8);
-  V3.poly([[-6.6,4.6,0.9],[-2.0,4.6,0.9],[-2.0,5.4,0.9],[-6.6,5.4,0.9]], '#d8d2c2', 9);
-  V3.poly([[ 0.8,6.4,0.9],[ 5.4,6.4,0.9],[ 5.4,13.2,0.9],[ 0.8,13.2,0.9]], '#bcd8ea', 8);
-  V3.push().move(-1.0, 11.6, 1.6).rotX(0.5).sc(1, 1, 0.8);      // 麦わら帽子
-  V3.prism(10, 4.4, 2.4, 0, 1.0, '#e0c98a', '#eed9a4');
-  V3.prism(10, 2.4, 2.2, 1.0, 2.6, '#d8bf7c', '#eed9a4');
+  V3.box(8.8, 0.3, 8.8, 0.3, 12.5, 12.9, '#cdc4ac', '#e0d8c2', '#a8a08c');  // ロープ
+  /* かけた布。上に折りかえしの帯を入れると、垂れているように見える */
+  const nuno = (x, w, bot, c, c2)=>{
+    V3.poly([[x-w,bot,1.0],[x+w,bot,1.0],[x+w,12.7,1.0],[x-w,12.7,1.0]], c, 12);
+    V3.poly([[x-w,11.5,1.1],[x+w,11.5,1.1],[x+w,12.7,1.1],[x-w,12.7,1.1]], c2, 13);
+    V3.poly([[x-w,bot,1.1],[x+w,bot,1.1],[x+w,bot+0.5,1.1],[x-w,bot+0.5,1.1]], c2, 13);
+  };
+  nuno(-5.6, 2.5, 6.2, C.white, '#cfc8b6');                      // シャツ
+  V3.poly([[-8.5,9.4,1.0],[-7.9,9.4,1.0],[-7.9,12.0,1.0],[-8.5,12.0,1.0]], C.white, 12);
+  V3.poly([[-3.3,9.4,1.0],[-2.7,9.4,1.0],[-2.7,12.0,1.0],[-3.3,12.0,1.0]], '#e8e2d4', 12);
+  nuno(-0.4, 1.9, 7.6, '#bcd8ea', '#94b8d0');                    // 手ぬぐい
+  nuno( 4.2, 2.2, 5.4, '#e8dcc4', '#c8bca0');                    // シーツ
+  V3.push().move(7.4, 8.0, 1.4).rotX(0.42).sc(1, 1, 0.82);       // 麦わら帽子
+  V3.prism(10, 4.2, 2.3, 0, 0.9, '#e0c98a', '#eed9a4');
+  V3.prism(10, 2.3, 2.1, 0.9, 2.5, '#d8bf7c', '#eed9a4');
   V3.pop();
 }],
 
 /* 井戸 */
-ido:[32, 34, 16, 27, ()=>{
-  V3.prism(10, 6.6, 6.2, 0, 6.2, C.stone, C.stone2);
-  V3.prism(10, 4.8, 4.8, 6.2, 6.4, '#1b2b3a', '#16222e');
-  for(const s of [-1, 1]){
-    V3.push().move(s*5.6, 0, 0);
-    V3.box(0.9, 0.9, 0.8, 0.8, 5.4, 15.0, C.wood2, C.wood, '#6d4826');
+ido:[36, 32, 18, 24, ()=>{
+  V3.push().sc(1, 1, 0.72);                                      // まるいふちは少しつぶす
+  V3.prism(12, 6.6, 6.2, 0, 5.2, C.stone, C.stone2);
+  V3.prism(12, 6.2, 6.2, 5.2, 5.8, C.stone2, '#bab4a6');
+  V3.prism(12, 4.2, 4.2, 5.8, 6.0, '#22323f', '#141f29');        // のぞき口
+  V3.pop();
+  for(const s of [-1, 1]){                                       // ふちの外がわに立つ柱
+    V3.push().move(s*7.6, 0, -0.4);
+    V3.box(0.85, 0.85, 0.75, 0.75, 0, 12.6, C.wood2, C.wood, '#6d4826');
     V3.pop();
   }
-  V3.box(0.5, 0.5, 0.5, 0.5, 8.0, 13.6, '#8a8478', '#a9a396', '#6d685e');
-  V3.box(7.6, 4.8, 1.4, 0.9, 15.0, 19.2, C.roof, C.roof3, C.roof2);
+  V3.push().move(0, 0, -0.4);
+  V3.box(8.6, 0.6, 8.6, 0.6, 11.7, 12.6, C.wood, C.wood3, '#6d4826');     // 横木
+  V3.push().sc(1, 1, 0.6);
+  V3.prism(8, 1.3, 1.3, 10.1, 11.5, '#8a6a44', '#a08a5a');                // 滑車
+  V3.pop();
+  V3.pop();
+  V3.box(0.3, 0.3, 0.3, 0.3, 6.4, 10.6, '#cdc4ac', '#e0d8c2', '#a8a08c'); // 綱
+  V3.push().move(0, 0, 1.0);                                              // つるべ
+  V3.prism(8, 2.0, 2.2, 6.6, 9.2, '#a87c4c', '#4a3520');
+  V3.prism(8, 2.25, 2.25, 8.7, 9.2, '#c49a64', '#c49a64');
+  V3.pop();
 }],
+
+/* かこいの柵（'f' のマス。となりとつながる） */
+fence:[24, 24, 12, 18, ()=>{
+  for(const s of [-1, 1]){
+    V3.push().move(s*6.6, 0, 0);
+    V3.box(0.9, 0.9, 0.8, 0.8, 0, 8.6, C.wood2, C.wood, '#6d4826');
+    V3.pop();
+  }
+  V3.box(8.0, 0.55, 8.0, 0.55, 6.4, 7.5, C.wood, C.wood3, '#6d4826');
+  V3.box(8.0, 0.55, 8.0, 0.55, 3.2, 4.3, C.wood, C.wood3, '#6d4826');
+}],
+
+/* かべぎわの棚（'v' のマス）。奥のかべにそって横につながる */
+tanaH:[24, 32, 12, 27, (v)=>{
+  V3.push().move(0, 0, -9.0);
+  V3.box(8.0, 2.7, 8.0, 2.7, 0, 9.2, '#6d4826', '#8a6a44', '#553618');
+  V3.rect(0, 4.0, 2.8, 16, 1, '#3f2a14', 9);
+  const G = [['#c85a4a','#e8c46a','#6a9a4a','#d8c9a0'],
+             ['#e8c46a','#cfe0e8','#c85a4a','#8fb0a8'],
+             ['#6a9a4a','#c85a4a','#e8e0c8','#d8a04a']][v];
+  V3.rect(-4.2, 2.2, 2.9, 5, 3, G[0], 10);
+  V3.rect( 1.6, 2.2, 2.9, 5, 3, G[1], 10);
+  V3.rect(-2.0, 6.4, 2.9, 5, 4, G[2], 10);
+  V3.rect( 4.0, 6.4, 4, 4, 4, G[3], 10);
+  V3.pop();
+}],
+/* たてにつながる棚。左のかべぎわ／右のかべぎわ */
+tanaVL:[24, 36, 13, 30, (v)=>{ shelfSide(-5.2, v); }],
+tanaVR:[24, 36, 11, 30, (v)=>{ shelfSide( 5.2, v); }],
 
 /* 郵便ポスト */
 post:[26, 32, 13, 26, ()=>{
@@ -3208,40 +3299,121 @@ kaki:[32, 32, 16, 26, ()=>{
   V3.rect( 0.4, 6.6, 4.4, 2, 2, '#7ea05e', 4);
 }],
 
-/* 焼却炉（マスをまとめて一つ） */
-incin:(w, h)=>[w*16+12, h*16+22, w*8+6, h*16+14, ()=>{
-  const hx = w*8 - 1.5, hz = h*5.0;
-  V3.box(hx+1.0, hz+1.0, hx+0.8, hz+0.8, 0, 1.6, '#5a6068', '#6a7078', '#4a5058');
-  V3.box(hx, hz, hx-1.0, hz-0.8, 1.6, 11.0, C.stone2, C.stone, '#5a6068');
-  V3.rect(0, 4.4, hz+0.3, Math.min(14, w*9), 8, '#2b3038', 8);
-  V3.rect(0, 4.4, hz+0.4, Math.min(10, w*7), 5, '#3f3128', 9);
-  V3.box(2.0, 2.0, 1.7, 1.7, 11.0, 19.0, '#4a4f55', '#5a6068', '#3a3f45');
-  V3.box(2.4, 2.4, 2.2, 2.2, 19.0, 20.0, '#3a3f45', '#4a4f55', '#2f343a');
+/* 土管（マスをまとめて一つ）。手前に口が向くよう、おくゆき向きに寝かせる */
+dokan:(w, h)=>[w*16+16, h*16+26, w*8+8, h*16+16, ()=>{
+  const r = Math.min(w*4.0, 5.8), L = Math.min(h*7.4, 9.0);
+  const kan = (x, y, z)=>{
+    V3.push().move(x, y + r, z).rotX(Math.PI/2);
+    V3.prism(14, r, r, -L, L, '#9a958c', '#aea89d');
+    V3.prism(14, r*0.62, r*0.62, L - 0.5, L + 0.15, '#3a3f45', '#252a2f');   // 中の暗がり
+    V3.pop();
+  };
+  const g = Math.min(w*8 - r - 0.4, r + 0.5);
+  kan(-g, 0, 0); kan(g, 0, 0);
+  kan(0, r*1.74, -1.6);
+}],
+
+/* 石どうろう */
+ishidouro:[26, 38, 13, 30, ()=>{
+  V3.prism(6, 5.6, 4.6, 0, 2.2, '#8a8478', '#a9a396');
+  V3.prism(6, 2.1, 2.1, 2.2, 7.4, '#a9a396', '#bcb6a8');
+  V3.prism(6, 5.4, 5.4, 7.4, 8.4, '#bcb6a8', '#cac4b6');
+  V3.prism(6, 4.4, 4.4, 8.4, 12.8, '#4a4a44', '#5a5a52');       // 火ぶくろ
+  V3.prism(6, 6.2, 5.6, 12.8, 14.2, '#bcb6a8', '#cac4b6');
+  V3.prism(6, 5.6, 0.9, 14.2, 17.4, '#a9a396', '#bcb6a8');
+}],
+
+/* はしご */
+hashigo:[24, 36, 12, 29, ()=>{
+  for(const s of [-1, 1]){
+    V3.push().move(s*3.8, 0, 0);
+    V3.box(0.7, 0.7, 0.7, 0.7, 0, 17.4, C.wood2, C.wood, '#6d4826');
+    V3.pop();
+  }
+  for(let i=1;i<6;i++)
+    V3.box(4.0, 0.45, 4.0, 0.45, i*2.9, i*2.9 + 0.85, C.wood, C.wood3, '#6d4826');
+}],
+
+/* かべのくぼみ・たまった水 */
+kubomi:[28, 20, 14, 15, ()=>{
+  V3.box(7.4, 4.8, 7.2, 4.6, 0, 3.4, '#45443f', '#3a3a36', '#333330');
+  V3.box(5.6, 3.4, 5.6, 3.4, 3.3, 3.7, '#22323f', '#33566a', '#1a2530');
+  V3.rect(-1.6, 3.9, 1.2, 4, 2, '#5f8a99', 5);
+}],
+
+/* オルガン */
+organ:[26, 32, 13, 24, ()=>{
+  for(const sx of [-1, 1]) for(const sz of [-1, 1]){
+    V3.push().move(sx*5.6, 0, sz*2.4);
+    V3.box(0.6, 0.6, 0.6, 0.6, 0, 5.0, '#5d4126', '#5d4126', '#4a3320');
+    V3.pop();
+  }
+  V3.box(7.2, 3.4, 7.2, 3.4, 5.0, 7.2, '#7a5a3a', '#8a6a44', '#5d4126');
+  V3.rect(0, 6.4, 3.5, 15, 3, '#e8e0cc', 9);                    // けんばん
+  V3.rect(0, 6.9, 3.6, 15, 1, '#3a3128', 10);
+  V3.box(7.2, 1.5, 7.2, 1.5, 7.2, 12.8, '#7a5a3a', '#8a6a44', '#5d4126');
+  V3.rect(0, 10.2, 1.6, 12, 4, '#5d4126', 9);
+}],
+
+/* 岩のベンチ */
+iwabench:[32, 22, 16, 16, ()=>{
+  for(const s of [-1, 1]){
+    V3.push().move(s*5.4, 0, 0).sc(1, 1, 0.7);
+    V3.prism(6, 3.4, 3.0, 0, 2.6, C.stone3, C.stone2);
+    V3.pop();
+  }
+  V3.push().sc(1, 1, 0.72);
+  V3.prism(8, 8.6, 8.2, 2.6, 4.4, C.stone2, C.stone);           // 平らな座面
+  V3.pop();
+}],
+
+/* 落書きの板 */
+rakugaki:[26, 30, 13, 23, ()=>{
+  V3.box(7.6, 2.3, 7.6, 2.3, 0, 11.4, '#8a7d5e', '#9a8d6e', '#6b6047');
+  for(let i=1;i<4;i++) V3.rect(0, i*2.8, 2.4, 15, 1, '#6b6047', 7);
+  V3.rect(-2.6, 4.4, 2.5, 8, 1, C.white, 8);
+  V3.rect( 1.8, 6.8, 2.5, 6, 1, C.white, 8);
+  V3.rect(-1.0, 8.8, 2.5, 7, 1, '#e8e0c8', 8);
+}],
+
+/* 絵馬かけ */
+emakake:[34, 32, 17, 25, ()=>{
+  for(const s of [-1, 1]){
+    V3.push().move(s*7.4, 0, 0);
+    V3.box(0.85, 0.85, 0.75, 0.75, 0, 11.8, C.wood2, C.wood, '#6d4826');
+    V3.pop();
+  }
+  V3.box(8.6, 0.6, 8.6, 0.6, 10.8, 11.8, C.wood, C.wood3, '#6d4826');
+  for(let i=-2;i<=2;i++){
+    V3.rect(i*3.1, 8.4, 0.9, 5, 4, '#dcbc80', 8);
+    V3.rect(i*3.1, 10.2, 1.0, 5, 1, '#a8884a', 9);
+  }
 }],
 
 /* しげみ */
-shige:[26, 22, 13, 17, (v)=>{
+shige:[30, 26, 15, 19, (v)=>{
   V3.rotY(v * 0.9);
   V3.push().sc(1, 1, 0.62);
-  V3.prism(7, 4.4, 6.0, 0, 2.6, C.tree3, C.tree2);
-  V3.prism(7, 6.0, 1.3, 2.6, 6.2, C.tree2, C.tree);
+  V3.prism(7, 5.2, 7.2, 0, 3.0, C.tree3, C.tree2);
+  V3.prism(7, 7.2, 1.5, 3.0, 7.4, C.tree2, C.tree);
   V3.pop();
-  V3.push().move(2.8, 0, 1.4).rotY(0.5).sc(1, 1, 0.62);
-  V3.prism(6, 2.6, 3.2, 0.8, 3.0, C.tree2, C.tree);
-  V3.prism(6, 3.2, 0.7, 3.0, 5.2, C.tree, C.tree);
+  V3.push().move(3.4, 0, 1.6).rotY(0.5).sc(1, 1, 0.62);
+  V3.prism(6, 3.0, 3.8, 0.9, 3.4, C.tree2, C.tree);
+  V3.prism(6, 3.8, 0.8, 3.4, 6.2, C.tree, C.tree);
   V3.pop();
 }],
 
 /* つみあげたタイヤ */
-tyre:[26, 24, 13, 18, ()=>{
-  V3.push().sc(1, 1, 0.7);
-  V3.prism(12, 5.6, 5.6, 0, 2.4, '#2b2b2b', '#343434');
-  V3.prism(12, 3.0, 3.0, 2.3, 2.6, C.dirt2, C.dirt2);
-  V3.pop();
-  V3.push().move(1.0, 2.6, 0.6).rotY(0.4).sc(1, 1, 0.7);
-  V3.prism(12, 5.2, 5.2, 0, 2.3, '#333333', '#3d3d3d');
-  V3.prism(12, 2.8, 2.8, 2.2, 2.5, C.dirt2, C.dirt2);
-  V3.pop();
+tyre:[28, 26, 14, 19, ()=>{
+  const wa = (x, z, y0, rot, c)=>{
+    V3.push().move(x, y0, z).rotY(rot).sc(1, 1, 0.72);
+    V3.prism(12, 6.0, 6.0, 0, 2.1, c, '#2a2a2a');            // ゴムの輪
+    V3.prism(12, 2.9, 2.9, 0.2, 2.35, '#171717', '#101010'); // まん中の穴
+    V3.pop();
+  };
+  wa(0, 0, 0, 0.0, '#2e2e2e');
+  wa(0.9, 0.5, 2.1, 0.35, '#353535');
+  wa(-0.5, -0.3, 4.2, 0.7, '#2b2b2b');
 }],
 
 /* 流木の板 */
@@ -3298,35 +3470,37 @@ hako:[26, 28, 13, 21, (v)=>{
   V3.box(6.6, 4.8, 6.6, 4.8, 0, 5.6, '#c8a06a', '#d4ae78', '#a8834f');
   V3.rect(0, 2.8, 4.9, 12, 2, '#a8834f', 6);
   if(v !== 1){
-    V3.push().move(v ? -1.4 : 1.2, 5.6, v ? -0.8 : 0.6).rotY(v ? 0.24 : -0.3);
-    V3.box(5.4, 3.9, 5.4, 3.9, 0, 4.4, '#b8905a', '#c8a06a', '#98784a');
-    V3.rect(0, 2.2, 4.0, 9, 2, '#98784a', 8);
+    V3.push().move(v ? -0.7 : 0.6, 5.6, v ? -0.5 : 0.4).rotY(v ? 0.18 : -0.2);
+    V3.box(5.2, 3.8, 5.2, 3.8, 0, 4.4, '#b8905a', '#c8a06a', '#98784a');
+    V3.rect(0, 2.2, 3.9, 9, 2, '#98784a', 8);
     V3.pop();
   }
   if(v === 2){
-    V3.push().move(0.6, 10.0, -0.4).rotY(0.5);
-    V3.box(4.2, 3.0, 4.2, 3.0, 0, 3.4, '#c8a06a', '#d4ae78', '#a8834f');
+    V3.push().move(-0.2, 10.0, -0.3).rotY(0.36);
+    V3.box(3.8, 2.8, 3.8, 2.8, 0, 3.2, '#c8a06a', '#d4ae78', '#a8834f');
     V3.pop();
   }
 }],
 
-/* 棚 */
-tana:[26, 34, 13, 26, ()=>{
-  V3.box(7.4, 3.2, 7.4, 3.2, 0, 13.0, C.wood2, C.wood, '#6d4826');
-  for(let i=0;i<3;i++) V3.rect(0, 2.6 + i*3.6, 3.3, 14, 1, C.wood3, 8);
-  V3.rect(-3.4, 4.6, 3.4, 4, 3, C.white, 9);
-  V3.rect( 2.8, 8.2, 3.4, 5, 3, '#d8c9a0', 9);
-  V3.rect(-1.0, 11.6, 3.4, 4, 3, '#c8b78c', 9);
-}],
 
 /* 手水舎（石の水ばち） */
-temizu:[28, 26, 14, 20, ()=>{
-  V3.box(6.4, 4.4, 6.0, 4.0, 0, 4.2, C.stone3, C.stone2, '#6e685e');
-  V3.box(6.8, 4.8, 6.8, 4.8, 4.2, 5.6, C.stone2, C.stone, '#7a746a');
-  V3.box(5.6, 3.8, 5.6, 3.8, 5.6, 6.0, '#4f6f7e', '#7fb0c4', '#3f5f6e');
-  V3.box(0.5, 0.5, 0.5, 0.5, 5.6, 9.6, '#8a8478', '#a9a396', '#6d685e');
-  V3.box(1.8, 0.5, 0.5, 0.5, 9.0, 9.6, '#a9a396', '#bcb6a8', '#8a8478');
-  V3.rect(2.2, 6.6, 3.9, 2, 3, '#8fc4d8', 6);
+temizu:[30, 30, 15, 23, ()=>{
+  V3.box(4.6, 3.2, 4.2, 2.8, 0, 2.4, '#6e685e', '#7a746a', '#5a554d');    // 台石
+  V3.box(6.8, 4.6, 6.8, 4.6, 2.4, 6.2, C.stone3, C.stone2, '#6e685e');    // 水ばち
+  V3.box(6.9, 4.7, 6.9, 4.7, 6.2, 6.7, C.stone2, '#b8b2a4', '#7a746a');   // ふち
+  V3.box(5.0, 3.0, 5.0, 3.0, 6.3, 6.6, '#5f8a99', '#7ea8b8', '#4e7482');  // 水
+  V3.push().move(-1.4, 0, -3.6);                                          // 竹の樋
+  V3.box(0.6, 0.6, 0.55, 0.55, 6.0, 12.0, '#8a9a5a', '#a2b26e', '#6a7a42');
+  V3.pop();
+  V3.push().move(-0.4, 11.2, -2.6).rotX(-0.5);
+  V3.box(0.65, 0.65, 0.6, 0.6, 0, 4.0, '#9aab68', '#b0c07c', '#78884c');
+  V3.pop();
+  V3.push().move(2.6, 0, 1.4);                                            // ひしゃく
+  V3.prism(8, 1.4, 1.4, 6.7, 7.8, '#b09050', '#5a4326');
+  V3.push().move(0, 7.4, 0).rotZ(0.5);
+  V3.box(2.8, 0.3, 2.8, 0.3, 0, 0.45, '#b09050', '#c6a666', '#8a7038');
+  V3.pop();
+  V3.pop();
 }],
 
 /* 漁の網 */
@@ -3353,27 +3527,42 @@ tetsubo:[36, 28, 18, 22, ()=>{
 }],
 
 /* 花だん */
-kadan:[30, 22, 15, 16, ()=>{
-  V3.box(8.0, 5.2, 8.0, 5.2, 0, 2.8, '#7a5a3a', '#8a6a44', '#5d4126');
-  V3.box(7.0, 4.2, 7.0, 4.2, 2.8, 3.4, '#6a4f30', '#7d5f3c', '#5a4128');
-  V3.rect(-2.6, 3.8, 3.0, 4, 3, '#6a9a4a', 5);
-  V3.rect( 2.4, 3.8, 2.4, 3, 3, '#5d8a42', 5);
+kadan:[30, 24, 15, 17, ()=>{
+  V3.box(8.0, 5.2, 8.0, 5.2, 0, 2.6, '#7a5a3a', '#8a6a44', '#5d4126');
+  V3.box(7.0, 4.2, 7.0, 4.2, 2.6, 3.2, '#5f4629', '#6d5233', '#523a20');   // つち
+  const kusa = (x, z, hh, c)=>{
+    V3.push().move(x, 3.2, z).sc(1, 1, 0.7);
+    V3.prism(6, 1.5, 0.5, 0, hh, c, c);
+    V3.pop();
+  };
+  kusa(-4.6, 1.4, 2.6, '#6a9a4a'); kusa(-1.6, -1.2, 3.2, '#5d8a42');
+  kusa( 1.4, 1.8, 2.4, '#71a352'); kusa( 4.6, -0.8, 3.0, '#5d8a42');
+  V3.rect(-1.6, 6.4, 2.2, 2, 2, '#e8d06a', 7);
+  V3.rect( 4.6, 6.2, 2.2, 2, 2, '#d8746a', 7);
 }],
 
 /* 二宮金次郎ふうの像 */
-zou:[26, 36, 13, 28, ()=>{
-  V3.box(5.4, 4.0, 5.0, 3.6, 0, 3.2, '#7a746a', '#8a8478', '#635e56');
-  V3.box(4.4, 3.2, 4.0, 2.8, 3.2, 4.6, '#8a8478', '#9a9488', '#6d685e');
-  V3.box(2.2, 1.6, 2.0, 1.5, 4.6, 12.0, '#9a9488', '#a5a094', '#7a746a');
-  V3.box(1.9, 1.5, 1.7, 1.3, 12.0, 13.4, '#9a9488', '#a5a094', '#7a746a');
-  V3.push().move(0, 13.4, 0);
-  V3.box(1.9, 1.7, 1.7, 1.5, 0, 3.4, '#a5a094', '#b0aa9e', '#8a8478');
+zou:[26, 38, 13, 29, ()=>{
+  V3.box(5.6, 4.2, 5.2, 3.8, 0, 2.6, '#6e685e', '#7f7a70', '#5a554d');    // 台石
+  V3.box(4.6, 3.4, 4.2, 3.0, 2.6, 4.0, '#7a746a', '#8a8478', '#635e56');
+  V3.push().move(0, 4.0, 0);
+  V3.box(2.6, 1.9, 2.1, 1.5, 0, 4.4, '#9a9488', '#a5a094', '#7a746a');    // すそ
+  V3.box(2.1, 1.5, 2.4, 1.7, 4.4, 8.4, '#a5a094', '#b0aa9e', '#837e74');  // 胴
+  V3.box(2.8, 1.8, 2.4, 1.6, 8.4, 9.4, '#aaa59a', '#b6b0a4', '#8a8478');  // かた
+  V3.box(0.9, 0.9, 0.9, 0.9, 9.4, 10.1, '#9a9488', '#a5a094', '#7a746a'); // 首
+  V3.push().move(0, 10.1, 0).sc(1, 1, 0.85);
+  V3.prism(8, 1.9, 1.5, 0, 2.9, '#b0aa9e', '#bcb6aa', 0.4);              // 頭
   V3.pop();
-  V3.push().move(-2.2, 8.4, 1.6).rotZ(0.3);                     // 本
-  V3.box(1.8, 1.4, 1.8, 1.4, 0, 0.7, '#b5afa2', '#c6c0b2', '#8a8478');
+  V3.push().move(-2.4, 6.6, 1.5).rotZ(0.28);                              // 本を持つ手
+  V3.box(0.7, 0.7, 0.7, 0.7, 0, 2.6, '#a5a094', '#b0aa9e', '#837e74');
   V3.pop();
-  V3.push().move(1.6, 10.0, -1.6);                              // 背中のたきぎ
-  V3.box(2.2, 1.6, 2.2, 1.6, -3.0, 1.4, '#8a7d5e', '#9a8d6e', '#6b6047');
+  V3.push().move(-2.0, 7.0, 2.4).rotZ(0.24).rotX(0.5);
+  V3.box(1.9, 1.4, 1.9, 1.4, 0, 0.6, '#c6c0b2', '#d2ccbe', '#8a8478');
+  V3.pop();
+  V3.push().move(0.4, 6.6, -2.6);                                         // 背中のたきぎ
+  V3.box(2.2, 1.5, 2.2, 1.5, 0, 3.4, '#8a7d5e', '#9a8d6e', '#6b6047');
+  for(let i=-1;i<=1;i++) V3.rect(i*1.3, 1.7, -1.6, 1, 4, '#6b6047', 4);
+  V3.pop();
   V3.pop();
 }],
 
@@ -3392,25 +3581,7 @@ tsukue:[24, 24, 12, 19, ()=>{
   V3.pop();
 }],
 
-/* 石の柱 */
-ishibashira:[24, 32, 12, 25, ()=>{
-  V3.box(5.6, 4.0, 5.2, 3.6, 0, 1.8, '#7a746a', '#8a8478', '#635e56');
-  V3.box(4.4, 3.0, 4.0, 2.6, 1.8, 12.4, '#8a8478', '#9a9488', '#6d685e');
-  V3.box(5.2, 3.8, 5.0, 3.6, 12.4, 13.8, '#a9a396', '#bcb6a8', '#8a8478');
-  V3.rect(0, 7.0, 3.1, 5, 5, '#4a4a44', 6);
-}],
 
-/* 古い機械 */
-kikai:[28, 30, 14, 23, ()=>{
-  V3.box(7.0, 4.4, 7.0, 4.4, 0, 11.4, '#5a5248', '#6a6258', '#443e37');
-  V3.rect(-3.0, 7.4, 4.5, 5, 4, '#8a8478', 7);
-  V3.rect( 3.0, 7.4, 4.5, 5, 4, '#8a8478', 7);
-  V3.rect( 0, 3.2, 4.5, 7, 3, '#3a352e', 7);
-  V3.push().move(3.4, 11.4, 0).sc(1, 1, 0.7);
-  V3.prism(8, 2.2, 2.2, 0, 2.6, '#7a746a', '#8a8478');
-  V3.pop();
-  V3.box(0.5, 0.5, 0.5, 0.5, 11.4, 15.6, '#6a6258', '#7a746a', '#4a453e');
-}],
 
 /* 店の棚（となりとつながる） */
 tanadai:[24, 30, 12, 23, (v)=>{
@@ -3488,20 +3659,20 @@ hokora:(w, h)=>[w*16+20, h*16+30, w*8+10, h*16+18, ()=>{
 }],
 
 /* 岩 */
-iwa:[26, 24, 13, 18, (v)=>{
-  const r = 0.9 + (v & 1) * 0.18, t = 1 + (v > 1 ? 0.3 : 0);
+iwa:[30, 28, 15, 21, (v)=>{
+  const r = 1.05 + (v & 1) * 0.16, t = 1.15 + (v > 1 ? 0.28 : 0);
   V3.rotY(v * 0.8);
-  V3.push().sc(1, 1, 0.62);
-  V3.prism(6, 5.6*r, 4.8*r, 0, 2.4*t, C.stone3, C.stone2);
-  V3.prism(6, 4.8*r, 2.8*r, 2.4*t, 5.0*t, C.stone2, C.stone);
+  V3.push().sc(1, 1, 0.64);
+  V3.prism(6, 6.4*r, 5.4*r, 0, 2.6*t, C.stone3, C.stone2);
+  V3.prism(6, 5.4*r, 3.0*r, 2.6*t, 5.4*t, C.stone2, C.stone);
   V3.pop();
-  V3.push().move(1.6*r, 0, 0.8).rotY(0.7).sc(1, 1, 0.62);
-  V3.prism(5, 2.4, 1.0, 4.0*t, 6.4*t, C.stone, C.stone);
+  V3.push().move(1.8*r, 0, 0.9).rotY(0.7).sc(1, 1, 0.64);
+  V3.prism(5, 2.6, 1.1, 4.4*t, 7.0*t, C.stone, C.stone);
   V3.pop();
 }]
 };
 
-const XVAR = {hako:3, iwa:4, shige:3, tanadai:3, itakabe:3};   // 何とおりに変えるか
+const XVAR = {hako:3, iwa:4, shige:3, tanadai:3, itakabe:3, tanaH:3, tanaVL:3, tanaVR:3};
 
 /* ---- 置きものを一つ描く ---- */
 function drawXProp(o){
@@ -3512,7 +3683,12 @@ function drawXProp(o){
   let v = 0;
   if(nv){ v = (o.gx*7 + o.gy*13) % nv; key += '.' + v; }
   const s = propSprite('X' + key, a[0], a[1], a[2], a[3], ()=>a[4](v));
-  blitProp(s, (o.gx + o.w/2)*16, MAPY + (o.gy + o.h)*16 - 2);
+  const fx = (o.gx + o.w/2)*16, fy = MAPY + (o.gy + o.h)*16 - 2;
+  blitProp(s, fx, fy);
+  if(o.k === 'ishidouro' && isNight()){        // 夜だけ、明かりが入るらしい
+    disc(fx, fy - 14, 11, 'rgba(255,214,140,0.18)');
+    px(fx-3, fy-16, 6, 5, 'rgba(255,226,168,0.55)');
+  }
 }
 
 /* ---- 灯台 ---- */
