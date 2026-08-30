@@ -4354,6 +4354,7 @@ function setMode(m){
   elHelp.style.display   = (m==='help') ? 'flex' : 'none';
   if(m!=='scene') elChoices.style.display='none';
   if(m!=='scene'){ talkFace = ''; talkLook = null; }
+  if(typeof ttlKeep==='function' && !ttlKeep()) stopTitleTheme();
   if(m==='field' && typeof refreshActD==='function'){ ctxLabel=''; refreshActD(); }
 }
 
@@ -10081,6 +10082,7 @@ function tanText(){
 /* =========================  タイトル  ========================= */
 function showTitle(){
   setMode('title');
+  startTitleTheme();                              // 音がもう起きていれば、すぐ鳴る
   const d = loadSave();
   $('titleCap').innerHTML = d
     ? 'つづき：八月' + d.day + '日' + (d.loop>1 ? '　（' + d.loop + '年目の夏）' : '')
@@ -10111,6 +10113,8 @@ function titleButtons(){
 }
 function startNewGame(){
   initAudio();
+  startTitleTheme();
+  ttlHold = true;                 // 曲は、はじまりの場面のおわりまで引きつぐ
   G = newGame(1); save(); startIntro();
 }
 function continueGame(){
@@ -10274,7 +10278,7 @@ function startIntro(){
     ['おばちゃん','子どもの相手。'],
     ['*','（十字ボタンか画面タップで歩けます）'],
     ()=>{ G.started=true; G.min=630; countVisit('yard'); save(); }
-  ], ()=>{ setMode('field'); areaLabelT=70; });
+  ], ()=>{ ttlHold = false; stopTitleTheme(); setMode('field'); areaLabelT=70; });
 }
 
 /* =========================  エンディング  ========================= */
@@ -10581,6 +10585,7 @@ function bgmAllowed(){
   if(mode === 'activity' && act && (act.kind === 'radio' || act.kind === 'diary')) return false;
   if(musTimer) return false;                            // レコードのかかっている家
   if(balTimer) return false;                            // 帰り道のバラード
+  if(ttlT)     return false;                            // タイトルの曲がまだ続いている
   if((ambOf()||{}).music) return false;
   return true;
 }
@@ -10612,6 +10617,91 @@ function bgmLoop(){
   bgmT = setTimeout(bgmLoop, wait);
 }
 
+/* =========================================================================
+   タイトルの曲
+   ─ 夏の終わりに、ふと思いだしたような節。
+     ゆっくりした四拍子で、上がってはおりてくる。
+   ─ 節も和音もこの作品のために書きおろしたもので、
+     どこかの曲を写しとったものではない。
+   ─ 71拍／分。八分音符ひとつで420ミリ秒。ひとまわり約54秒。
+   ========================================================================= */
+const TTL_CH = [                                  /* 一小節にひとつの和音 */
+  [131,196,262,330],  /* C   */  [110,165,262,330],  /* Am7 */
+  [175,262,349,440],  /* F   */  [196,294,392,494],  /* G   */
+  [165,247,330,392],  /* Em7 */  [110,165,220,330],  /* Am  */
+  [147,220,294,349],  /* Dm7 */  [196,294,392,494],  /* G   */
+  [175,262,349,440],  /* F   */  [196,294,392,494],  /* G   */
+  [165,247,330,392],  /* Em7 */  [110,165,220,330],  /* Am  */
+  [175,262,349,440],  /* F   */  [196,294,392,494],  /* G   */
+  [147,220,294,349],  /* Dm7 */  [196,294,392,494]   /* G   */
+];
+const TTL_MEL = [
+  392,0,523,0, 659,0,  0,0,      /* ソ ド ミ ──   のぼる    */
+  587,0,523,0, 440,0,  0,0,      /* レ ド ラ ──   おりる    */
+  523,0,587,0, 698,0,659,0,      /* ド レ ファ ミ            */
+  587,0,  0,0,   0,0,  0,0,      /* レ ────────  ためる    */
+  659,0,784,0, 880,0,  0,0,      /* ミ ソ ラ ──   高くなる  */
+  784,0,659,0, 587,0,  0,0,      /* ソ ミ レ ──              */
+  523,0,587,0, 440,0,494,0,      /* ド レ ラ シ              */
+  523,0,  0,0,   0,0,  0,0,      /* ド ────────  ひと区切り */
+  698,0,784,0, 880,0,  0,0,      /* ファ ソ ラ ── ひらける   */
+  988,0,880,0, 784,0,  0,0,      /* シ ラ ソ ──   いちばん上 */
+  880,0,784,0, 659,0,587,0,      /* ラ ソ ミ レ   ながい下り  */
+  659,0,  0,0,   0,0,  0,0,      /* ミ ────────             */
+  698,0,659,0, 587,0,523,0,      /* ファ ミ レ ド            */
+  494,0,587,0, 659,0,  0,0,      /* シ レ ミ ──              */
+  587,0,523,0, 440,0,  0,0,      /* レ ド ラ ──   おちつく   */
+  392,0,  0,0, 523,0,  0,0       /* ソ ── ド ──   こたえ     */
+];
+let ttlT = null, ttlStep = 0;
+let ttlHold = false;         // はじまりの場面のあいだも、そのまま鳴らしつづける
+
+function startTitleTheme(){
+  if(ttlT || !AC || !audioOn || !bgmOn) return;
+  ttlStep = 0;
+  ttlT = setInterval(titleTick, 420);
+  setLayer('cicada', 0.011);                      // 遠くのセミと風をうっすら
+  setLayer('wind',   0.013);
+}
+function stopTitleTheme(){
+  if(!ttlT) return;
+  clearInterval(ttlT); ttlT = null;
+  ttlHold = false;
+  if(G && G.started) setAmbience();               // その場所の音にもどす
+  else { setLayer('cicada', 0); setLayer('wind', 0); }
+}
+/* まだタイトルの曲を鳴らしておく場面かどうか。
+   タイトルそのものと、そこから開いた「あそびかた」と、はじまりの場面。 */
+function ttlKeep(){
+  return mode === 'title' || ttlHold || (mode === 'help' && helpFrom === 'title');
+}
+function titleTick(){
+  if(!AC || !audioOn || !bgmOn || !ttlKeep()){ stopTitleTheme(); return; }
+  const step = ttlStep % TTL_MEL.length, bar = (step >> 3) & 15, e = step & 7;
+  const ch = TTL_CH[bar];
+  if(e === 0){
+    tone(ch[0]/2, 2.8, 'sine', 0.020);                       // 低いところ
+    for(let i=1;i<4;i++) tone(ch[i], 3.2, 'sine', 0.0042);   // うすくのばす和音
+  }
+  if(e === 2) tone(ch[2], 1.5, 'triangle', 0.0090);          // あいだの分散和音
+  if(e === 4) tone(ch[1], 1.6, 'triangle', 0.0080);
+  if(e === 6) tone(ch[3], 1.3, 'triangle', 0.0070);
+  const m = TTL_MEL[step];
+  if(m){
+    bgmNote(m, 1.35, 0.030, 'triangle');                     // 主の旋律
+    setTimeout(()=>{ bgmNote(m*2, 0.60, 0.0055, 'sine'); }, 14);   // オルゴールのきらめき
+  }
+  ttlStep++;
+}
+/* ブラウザは、なにか操作するまで音を出させてくれない。
+   タイトルではじめに画面をさわった時点で、音を起こして曲をはじめる。 */
+function titleAudioKick(){
+  if(mode !== 'title') return;
+  initAudio();
+  startTitleTheme();
+}
+document.addEventListener('pointerdown', titleAudioKick, true);
+
 const AMB = {
   yard:       {cicada:0.030, wave:0.012, wind:0.020, chime:1, bird:1},
   inn:        {fan:0.050, wind:0.006, chime:1, clock:1},
@@ -10638,7 +10728,7 @@ const AMB = {
 };
 function ambOf(){ return AMB[G.area] || {cicada:0.02, wind:0.02}; }
 function setAmbience(){
-  if(!AC) return;
+  if(!AC || !G) return;                        // タイトルではまだ場所が決まっていない
   const A = MAPS[G.area] || {}, p = period(), a = ambOf();
   const night = p==='night', storm = G.weather==='storm';
   const jump = (ambArea !== G.area);                 // 場所が変わった瞬間
@@ -11486,7 +11576,8 @@ function lastPageDone(){
         '<div style="height:26px"></div>';
       const b = document.createElement('button');
       b.className='tb'; b.textContent='もう一度、あの夏へ';
-      b.onclick = ()=>{ const lp=(G.loop||1)+1; G = newGame(lp); save(); startIntro(); };
+      b.onclick = ()=>{ const lp=(G.loop||1)+1; G = newGame(lp); save();
+                        startTitleTheme(); ttlHold = true; startIntro(); };
       elEnding.appendChild(b);
       const b2 = document.createElement('button');
       b2.className='tb sub'; b2.style.marginTop='10px'; b2.textContent='絵日記を読みかえす';
