@@ -1975,14 +1975,14 @@ const EXPR = {
        lid = まぶたの開き（白目）、iris = 黒目。小さく描くときは黒目だけ。 ---- */
 function eyeShape(kind, rx, ry, side){
   switch(kind){
-    case 'wide':  return {lid:eyeOval(rx*1.08, ry*1.30), iris:eyeOval(rx*0.84, ry*0.94)};
-    case 'open':  return {lid:eyeOval(rx, ry),           iris:eyeOval(rx*0.86, ry*0.88)};
-    case 'soft':  return {lid:eyeOval(rx, ry*0.88, ry*0.40), iris:eyeOval(rx*0.86, ry*0.70, ry*0.32)};
-    case 'half':  return {lid:eyeOval(rx, ry, ry*0.02), iris:eyeOval(rx*0.86, ry*0.88, ry*0.00)};
+    case 'wide':  return {lid:eyeOval(rx*1.08, ry*1.30), iris:eyeOval(rx*0.98, ry*1.18)};
+    case 'open':  return {lid:eyeOval(rx, ry),           iris:eyeOval(rx*0.92, ry*0.94)};
+    case 'soft':  return {lid:eyeOval(rx, ry*0.88, ry*0.40), iris:eyeOval(rx*0.92, ry*0.78, ry*0.34)};
+    case 'half':  return {lid:eyeOval(rx, ry, ry*0.02), iris:eyeOval(rx*0.92, ry*0.94, ry*0.00)};
     case 'droop': return {lid:eyeOval(rx, ry, ry*0.30, -ry*0.62*side),
-                          iris:eyeOval(rx*0.86, ry*0.88, ry*0.20, -ry*0.52*side)};
+                          iris:eyeOval(rx*0.92, ry*0.94, ry*0.24, -ry*0.56*side)};
     case 'sharp': return {lid:eyeOval(rx, ry, ry*0.34,  ry*0.66*side),
-                          iris:eyeOval(rx*0.86, ry*0.88, ry*0.24,  ry*0.56*side)};
+                          iris:eyeOval(rx*0.92, ry*0.94, ry*0.28,  ry*0.60*side)};
     case 'shut':  return {band:arcBand(rx*1.02, ry*0.42, ry*0.20)};
     case 'arc':   return {band:arcBand(rx*1.06, -ry*0.66, ry*0.21)};
   }
@@ -2207,10 +2207,15 @@ function drawFace(hw, hh, hd, look, exName, talking, big){
   if(S.lookU) gy =  eh*0.26;
   if(S.lookD) gy = -eh*0.28;
 
+  /* 顔のパーツの前後は、置いた高さではなく extra だけで決めたい。
+     V3 は「高いところにあるものほど奥」と数えるので、その分をここで引いておく。
+     こうしないと、少し下げて描いたもの――伏し目の黒目や、口の照り――が
+     白目や口のうしろにまわりこんで、見えなくなってしまう。 */
   const P = (pts, col, u, v, extra)=>{
-    const q = new Array(pts.length);
-    for(let i=0;i<pts.length;i++) q[i] = [pts[i][0]+u, pts[i][1]+v, z];
-    V3.poly(q, col, FBIAS + (extra||0));
+    const n = pts.length, q = new Array(n);
+    let ay = 0;
+    for(let i=0;i<n;i++){ const y = pts[i][1] + v; q[i] = [pts[i][0]+u, y, z]; ay += y; }
+    V3.poly(q, col, FBIAS + (extra||0) - (ay/n)/HK);
   };
 
   /* ほお */
@@ -2236,7 +2241,7 @@ function drawFace(hw, hh, hd, look, exName, talking, big){
     const ox = side*ex, oy = ey;
     if(sh.band){ P(sh.band, dark, ox, oy, 0.08); return; }
     if(big && sh.lid){
-      P(sh.lid, '#f7f3e9', ox, oy, 0.04);
+      P(sh.lid, f.sclera || '#efe7d8', ox, oy, 0.04);
       P(sh.iris, dark, ox + gy*0.10, oy + gy*0.5, 0.10);
       P(eyeOval(ew*0.20, eh*0.22), 'rgba(255,255,255,0.90)',
         ox - ew*0.30, oy + gy*0.5 + eh*0.34, 0.14);
