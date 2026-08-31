@@ -1975,14 +1975,18 @@ const EXPR = {
        lid = まぶたの開き（白目）、iris = 黒目。小さく描くときは黒目だけ。 ---- */
 function eyeShape(kind, rx, ry, side){
   switch(kind){
-    case 'wide':  return {lid:eyeOval(rx*1.08, ry*1.30), iris:eyeOval(rx*0.98, ry*1.18)};
-    case 'open':  return {lid:eyeOval(rx, ry),           iris:eyeOval(rx*0.92, ry*0.94)};
-    case 'soft':  return {lid:eyeOval(rx, ry*0.88, ry*0.40), iris:eyeOval(rx*0.92, ry*0.78, ry*0.34)};
-    case 'half':  return {lid:eyeOval(rx, ry, ry*0.02), iris:eyeOval(rx*0.92, ry*0.94, ry*0.00)};
+    /* 黒目は白目の 0.86 倍で描いていたが、それは前後がまちがっていて
+       黒目の一部が白目にかくれていたころの数字。前後を直したら黒目が
+       まるごと出るようになり、目が大きく見えるようになってしまった。
+       見た目がもとどおりになるよう、黒目を 0.94 倍にちぢめてある。 */
+    case 'wide':  return {lid:eyeOval(rx*1.08, ry*1.30), iris:eyeOval(rx*0.79, ry*0.89)};
+    case 'open':  return {lid:eyeOval(rx, ry),           iris:eyeOval(rx*0.81, ry*0.83)};
+    case 'soft':  return {lid:eyeOval(rx, ry*0.88, ry*0.40), iris:eyeOval(rx*0.81, ry*0.66, ry*0.30)};
+    case 'half':  return {lid:eyeOval(rx, ry, ry*0.02), iris:eyeOval(rx*0.81, ry*0.83, ry*0.00)};
     case 'droop': return {lid:eyeOval(rx, ry, ry*0.30, -ry*0.62*side),
-                          iris:eyeOval(rx*0.92, ry*0.94, ry*0.24, -ry*0.56*side)};
+                          iris:eyeOval(rx*0.81, ry*0.83, ry*0.19, -ry*0.49*side)};
     case 'sharp': return {lid:eyeOval(rx, ry, ry*0.34,  ry*0.66*side),
-                          iris:eyeOval(rx*0.92, ry*0.94, ry*0.28,  ry*0.60*side)};
+                          iris:eyeOval(rx*0.81, ry*0.83, ry*0.23,  ry*0.53*side)};
     case 'shut':  return {band:arcBand(rx*1.02, ry*0.42, ry*0.20)};
     case 'arc':   return {band:arcBand(rx*1.06, -ry*0.66, ry*0.21)};
   }
@@ -2241,7 +2245,7 @@ function drawFace(hw, hh, hd, look, exName, talking, big){
     const ox = side*ex, oy = ey;
     if(sh.band){ P(sh.band, dark, ox, oy, 0.08); return; }
     if(big && sh.lid){
-      P(sh.lid, f.sclera || '#efe7d8', ox, oy, 0.04);
+      P(sh.lid, '#f7f3e9', ox, oy, 0.04);
       P(sh.iris, dark, ox + gy*0.10, oy + gy*0.5, 0.10);
       P(eyeOval(ew*0.20, eh*0.22), 'rgba(255,255,255,0.90)',
         ox - ew*0.30, oy + gy*0.5 + eh*0.34, 0.14);
